@@ -19,18 +19,15 @@ Choose or combine established frameworks based on educational efficacy:
 
 ---
 
-## 2. Rigorous Justification Rule
+## 2. Mandatory Directives
 
 > [!CAUTION]
 > **No Faddish Selection**:
 > Never choose an instructional framework simply because it sounds modern, fashionable, or entertaining. The choice must be rigorously defended against the diagnosed cognitive gap.
 
-For each selected approach, the agent must document:
-1. **Fit to Problem**: Why this approach directly bridges the diagnosed deficit.
-2. **Objective Alignment**: Which specific `LO-xx` objectives are governed by this approach.
-3. **Impact on Activities**: How this approach shapes learner activities.
-4. **Impact on Progression**: How this approach regulates sequencing and gating.
-5. **Impact on Evidence**: How this approach influences assessment criteria.
+1. **Defend the Fit**: Prove why this approach directly bridges the diagnosed deficit from Stage 2.
+2. **Map to Objectives**: Identify which specific `LO-xx` objectives are governed by this approach.
+3. **Trace Forward**: Pass the selected pedagogical approach as a direct mandatory input into the subsequent **Learning Experience Requirements (Stage 16)** and **Learning Environment Requirements (Stage 17)**.
 
 ---
 
@@ -41,8 +38,10 @@ For each selected approach, the agent must document:
 - **Primary Instructional Approach**: [e.g., Deliberate Practice combined with Simulation-Based Learning]
 - **Pedagogical Rationale**: [Defensible argument connecting approach to Stage 2 diagnosis]
 - **Objective Mapping**: [Which LOs use which approach]
-- **Instructional Implications**:
+- **Downstream Instructional Implications**:
   - *Activity Design*: [How tasks must be structured]
   - *Progression Dynamics*: [How mastery/gating is enforced]
+  - *Experience Implications*: [Direct guidance for Stage 16]
+  - *Environment Implications*: [Direct guidance for Stage 17]
   - *Evidence Generation*: [How assessment artifacts are collected]
 ```

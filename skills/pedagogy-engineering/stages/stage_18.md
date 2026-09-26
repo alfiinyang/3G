@@ -1,109 +1,58 @@
-# Stage 18: Learning Plan Assembly & Static Schema
+# Stage 18: Game-Design Requirements
 
-Assemble the synthesized pedagogical analysis into the final, standardized deliverable for the game designer.
+Translate instructional, experiential, and environmental requirements into functional specifications that an eventual game designer can act upon.
 
 ---
 
-## 1. The Static Output Schema Rule
+## 1. Mandatory Directives
 
-> [!CAUTION]
-> **Strict Structural Invariance**:
-> The final Learning Plan **MUST** use the exact 22 top-level sections (A through V) listed below.
-> Sections **must not be reordered, renamed, combined, or omitted**.
+> [!IMPORTANT]
+> **Translate Pedagogy to Functional Capabilities, NOT Mechanical Solutions**:
+> Answer: **"What must the game enable the learner to do in order for the intended learning to occur?"**
+> - *Pedagogical Requirement*: "The game system must allow the learner to isolate faulty components and query operational telemetry without resetting overall puzzle state."
+> - *Game Design (Designer's Territory)*: "The player uses an electromagnetic sensor tool while dodging patrol drones."
 
-```text
-A. Learning Plan Metadata
-B. Audience and Context
-C. Learning Problem
-D. Learning Goal
-E. Learning Objectives
-F. Knowledge and Skill Structure
-G. Content Scope
-H. Depth and Complexity
-I. Learning Progression
-J. Learning Scenario
-K. Learning Activities
-L. Scaffolding
-M. Feedback Requirements
-N. Evidence of Learning
-O. Transfer Requirements
-P. Pedagogical Approach
-Q. Game-Design Requirements
-R. Game-Form Requirements
-S. Game Designer Handoff
-T. Traceability Matrix
-U. Assumptions and Design Decisions
-V. Pedagogical Validation
+Synthesize and translate inputs directly from:
+- Learning Activities (Stage 10)
+- Scaffolding & Fading Logic (Stage 11)
+- Multi-Tiered Feedback (Stage 12)
+- Evidence of Learning (Stage 13)
+- Transfer Requirements (Stage 14)
+- **Learning Experience Requirements (Stage 16)**
+- **Learning Environment Requirements (Stage 17)**
+
+---
+
+## 2. Core Functional Requirements Categories
+
+Formulate explicit requirements across seven critical dimensions:
+
+1. **Required Learner Interactions**: Verbs the game mechanics must afford (e.g. manipulate, assemble, isolate, test, query, compare).
+2. **Challenge Characteristics**: How challenges must be framed (variable difficulty, competing constraints, realistic noise, time bounds).
+3. **Feedback Behaviors**: How the game world must react to player decisions (dynamic causal simulations, explanatory logs, post-action debriefs).
+4. **Progression Behaviors**: How the game tracks mastery (mastery gating, adaptive difficulty, unlockable complexity).
+5. **Practice Opportunities**: Frequency, variety, and spaced repetition required for fluency.
+6. **Required Experience Implementation**: How the game design must support the agency, uncertainty, and controlled discovery mandated in Stage 16.
+7. **Required Environmental Implementation**: How the game engine/environment must provide the manipulable elements and contextual fidelity mandated in Stage 17.
+
+---
+
+## 3. Required Output Format
+
+Assign every game-design requirement a unique identifier (`GDR-01`, `GDR-02`, ...) and map its pedagogical origin:
+
+```markdown
+### 18. Game-Design Requirements
+
+#### 1. Interaction Requirements
+- **GDR-01**: The game system must allow the learner to [action, e.g. alter resistor parameters dynamically within an active schematic]. *(Traces to: ACT-01, ENV-01)*
+
+#### 2. Challenge & Environmental System Requirements
+- **GDR-02**: The game must support [characteristic, e.g. varying circuit topologies while maintaining invariant physical laws]. *(Traces to: LO-02, ENV-01)*
+
+#### 3. Experience & Feedback Implementation
+- **GDR-03**: The simulation must [behavior, e.g. model physical component burnout when current exceeds threshold]. *(Traces to: LER-01, Stage 12)*
+
+#### 4. Progression & Mastery Gating
+- **GDR-04**: Progression to multi-branch networks must be gated on [benchmark, e.g. achieving 2 consecutive unassisted diagnoses in single-branch circuits]. *(Traces to: Stage 8, Stage 11)*
 ```
-
----
-
-## 2. Detailed Field Specifications for Sections A–V
-
-### A. Learning Plan Metadata
-- Title, version, subject domain, intended audience, authoring context, document status, assumptions, and constraints summary.
-
-### B. Audience and Context
-- Audience demographic profile, reading/educational level, prior knowledge & misconceptions, learning environment (physical/digital), learning context, institutional constraints.
-
-### C. Learning Problem
-- Current learner state, target learner state, identified cognitive/practical gap, and standard Learning Problem Statement.
-
-### D. Learning Goal
-- Primary learning goal (learner-centered capability), supporting goals (if essential), and pedagogical rationale.
-
-### E. Learning Objectives
-- Enumeration of all `LO-xx` items with syntax: *Learner + measurable action + target knowledge/skill + condition*. Target type, prerequisites, and alignment.
-
-### F. Knowledge and Skill Structure
-- Declarative, Conceptual, Procedural, and Strategic knowledge breakdowns, each mapped to specific `LO-xx`.
-
-### G. Content Scope
-- Core content, Supporting content, Optional/Extension content, Prerequisite content, and Excluded content (with justification).
-
-### H. Depth and Complexity
-- Cognitive depth level, complexity level, independence expectations, and acceptable performance conditions per objective.
-
-### I. Learning Progression
-- Staged developmental sequence (Stage I Foundations $\to$ ... $\to$ Independent Mastery), prerequisites, milestones, and Mermaid dependency graph.
-
-### J. Learning Scenario
-- Operational situation, functional learner role, authentic problem, required knowledge/skill, target action, and meaningful consequences.
-
-### K. Learning Activities
-- Complete set of 10-point activity specifications (`ACT-xx`) addressing all objectives.
-
-### L. Scaffolding
-- Initial support, guided support, reduced support, independent execution, and explicit support-removal/fading triggers.
-
-### M. Feedback Requirements
-- Correctness, explanatory, consequence, corrective guidance, strategic, and progress feedback specifications mapped to activities.
-
-### N. Evidence of Learning
-- Observable evidence, target performance, success criteria, and assessment conditions mapped to every objective.
-
-### O. Transfer Requirements
-- Transfer expectations (near/far), novel application contexts, transfer tasks, and evidence of generalization.
-
-### P. Pedagogical Approach
-- Selected instructional framework(s) (e.g. deliberate practice, inquiry, mastery), defensible rationale, and instructional implications.
-
-### Q. Game-Design Requirements
-- Functional capability requirements (`GDR-xx`): interaction requirements, challenge characteristics, feedback behaviors, progression gating, and practice opportunities.
-
-### R. Game-Form Requirements
-- Interaction model analysis, candidate game forms evaluated, recommended game form with pedagogical justification, and essential mechanical characteristics.
-
-### S. Game Designer Handoff
-- Summary of learning requirements, non-negotiable pedagogical mandates, flexible design zones, design constraints, and open questions delegated to designer.
-
-### T. Traceability Matrix
-- Exhaustive cross-reference table ensuring end-to-end alignment:
-  $$\mathbf{Goal} \longrightarrow \mathbf{Objective\ (LO)} \longrightarrow \mathbf{Content} \longrightarrow \mathbf{Activity\ (ACT)} \longrightarrow \mathbf{Evidence} \longrightarrow \mathbf{Game\ Req\ (GDR)}$$
-  *Rule*: Every single LO must appear. Every GDR must trace back to pedagogy.
-
-### U. Assumptions and Design Decisions
-- Clear separation of: (1) User-provided information, (2) Agent-derived decisions, (3) Material assumptions and their implications, (4) Unresolved uncertainties.
-
-### V. Pedagogical Validation
-- Quality checklist results confirming all 40 criteria from Stage 19 have been met.

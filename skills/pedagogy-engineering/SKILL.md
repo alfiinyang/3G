@@ -3,7 +3,8 @@ name: pedagogy-engineering
 description: >-
   Transforms a teacher/trainer's learning request into a structured, game-designer-ready
   learning plan. Defines the learning problem, pedagogical structure, learning progression,
-  evidence models, and game-facing learning requirements without designing the game itself.
+  learner experience requirements, learning environment requirements, evidence models,
+  and game-facing learning requirements without designing the game itself.
   Use when developing, structuring, or analyzing pedagogical specifications, learning goals,
   and educational requirements for game-based learning.
 ---
@@ -16,7 +17,7 @@ Transform the user's educational request into a structured, game-designer-ready 
 > **Boundary of Responsibility**:
 > **Do NOT design the game.** Do not write narrative stories, invent game lore, script characters, select art styles, mock up UI layouts, design levels, or write game engine code.
 > 
-> Confine your work strictly to engineering the **pedagogical architecture**: diagnose the learning problem, formulate measurable objectives, sequence the progression, design scaffolding and feedback, establish observable evidence, and specify the functional learning capabilities the game must afford.
+> Confine your work strictly to engineering the **pedagogical architecture**: diagnose the learning problem, formulate measurable objectives, sequence progression, design scaffolding and feedback, specify educational experience and environment requirements, establish observable evidence, and specify the functional learning capabilities the game must afford.
 
 ---
 
@@ -24,12 +25,12 @@ Transform the user's educational request into a structured, game-designer-ready 
 
 Answer these two governing questions in strict sequential order:
 1. **Pedagogical Requirement**: *Given this audience, goal, and context, what should actually be taught and what should the learner be able to do afterward?*
-2. **Game-Facing Requirement**: *What must a game enable the learner to do in order for that learning to occur?*
+2. **Game-Facing Requirement**: *How should the learner learn this, what should the learner experience, what must the learning environment enable, and what must a game support in order for that learning to occur?*
 
 Enforce this derivation chain at all times:
-$$\mathbf{Goal} \longrightarrow \mathbf{Objectives} \longrightarrow \mathbf{Target\ Performance} \longrightarrow \mathbf{Activities} \longrightarrow \mathbf{Interactions} \longrightarrow \mathbf{Game\ Form}$$
+$$\mathbf{Goal} \longrightarrow \mathbf{Objectives} \longrightarrow \mathbf{Target\ Performance} \longrightarrow \mathbf{Activities} \longrightarrow \mathbf{Experience} \longrightarrow \mathbf{Environment} \longrightarrow \mathbf{Interactions} \longrightarrow \mathbf{Game\ Form}$$
 
-**Never** start from a preferred game genre or topic name.
+**Never** select a game genre or mechanic purely from the subject topic or personal preference.
 
 ---
 
@@ -45,15 +46,46 @@ $$\mathbf{Goal} \longrightarrow \mathbf{Objectives} \longrightarrow \mathbf{Targ
 
 ---
 
+## Workflow & Stage Directory
+
+The process consists of **User Intake (Stage 0)** followed by **21 autonomous pedagogical engineering stages**. Backtrack to revise earlier stages whenever later analysis reveals design inconsistencies.
+
+| Stage | Name | Key Objective & Deliverable | Stage Reference Document |
+| :---: | :--- | :--- | :--- |
+| **0** | **User Intake & Rules** | Obtain 5 intake parameters; manage assumptions without over-interrogating. | [stages/stage_0.md](./stages/stage_0.md) |
+| **1** | **Intent & Context** | Interpret request; isolate explicit user facts vs assumptions; prevent premature design. | [stages/stage_1.md](./stages/stage_1.md) |
+| **2** | **Problem Diagnosis** | Diagnose learner current vs target state gap: `Given [state], learner needs [capability] so [performance] in [context]`. | [stages/stage_2.md](./stages/stage_2.md) |
+| **3** | **Goal Formulation** | Define one primary learner-centered goal focused on capability rather than topic. | [stages/stage_3.md](./stages/stage_3.md) |
+| **4** | **Objective Decomposition** | Break down goal into observable objectives using approved action verbs (10 quality rules). | [stages/stage_4.md](./stages/stage_4.md) |
+| **5** | **Knowledge & Skill Structure** | Categorize into Declarative, Conceptual, Procedural, and Strategic knowledge. | [stages/stage_5.md](./stages/stage_5.md) |
+| **6** | **Content Scope** | Establish boundaries: Core, Supporting, Optional, Prerequisite, and Excluded content. | [stages/stage_6.md](./stages/stage_6.md) |
+| **7** | **Depth & Complexity** | Define cognitive depth level, independence, and performance conditions per objective. | [stages/stage_7.md](./stages/stage_7.md) |
+| **8** | **Learning Progression** | Sequence dependencies: Foundation → Guided Practice → Supported Challenge → Independent → Transfer. | [stages/stage_8.md](./stages/stage_8.md) |
+| **9** | **Learning Scenario** | Specify situational role, challenge, and consequences (strictly pedagogical, no game narrative). | [stages/stage_9.md](./stages/stage_9.md) |
+| **10** | **Learning Activities** | Specify learner actions with 10-point activity specifications. | [stages/stage_10.md](./stages/stage_10.md) |
+| **11** | **Scaffolding** | Define support progression and systematic fading logic to build learner independence. | [stages/stage_11.md](./stages/stage_11.md) |
+| **12** | **Feedback Requirements** | Define feedback beyond correct/incorrect (explanatory, consequence, corrective, strategic). | [stages/stage_12.md](./stages/stage_12.md) |
+| **13** | **Evidence of Learning** | Define observable evidence, criteria, and conditions; isolate learning from game success. | [stages/stage_13.md](./stages/stage_13.md) |
+| **14** | **Transfer Requirements** | Establish near and far transfer expectations across novel contexts and conditions. | [stages/stage_14.md](./stages/stage_14.md) |
+| **15** | **Pedagogical Approach** | Select and justify pedagogical framework(s) (e.g. deliberate practice, inquiry, mastery). | [stages/stage_15.md](./stages/stage_15.md) |
+| **16** | **Learning Experience** | Define educational experiences (agency, controlled discovery, uncertainty, consequence pressure). | [stages/stage_16.md](./stages/stage_16.md) |
+| **17** | **Learning Environment** | Define what environment must enable (manipulable elements, causal states, justify fidelity). | [stages/stage_17.md](./stages/stage_17.md) |
+| **18** | **Game-Design Requirements** | State functional learning capabilities required from the game ("What must the game allow?"). | [stages/stage_18.md](./stages/stage_18.md) |
+| **19** | **Game-Form Requirements** | Derive interaction model & candidate forms; define clear handoff boundaries. | [stages/stage_19.md](./stages/stage_19.md) |
+| **20** | **Plan Assembly & Schema** | Compile final Learning Plan matching the 24-section static schema (A–X) and Traceability Matrix. | [stages/stage_20.md](./stages/stage_20.md) |
+| **21** | **Quality Validation** | Run 53-point validation checklist, evaluate 23 completion criteria, prevent 18 failure states. | [stages/stage_21.md](./stages/stage_21.md) |
+
+---
+
 ## Step-by-Step Execution Workflow
 
-Execute the following sequence. Backtrack to revise earlier stages whenever later analysis reveals design inconsistencies.
+Execute the following sequence in order:
 
 ### Step 0: Execute User Intake & Manage Assumptions
 1. Inspect the user's initial request.
 2. Obtain information across the 5 intake dimensions: **Audience (MANDATORY)**, Topic, Stated Goal, Learning Context, Constraints.
 3. If Audience is missing or ambiguous, **stop and ask the user for clarification**. Never invent the audience.
-4. For optional inputs (Topic, Goal, Context, Constraints), infer reasonable defaults only if the user delegates them or context determines them. Record every material inference as an assumption under Section U.
+4. For optional inputs (Topic, Goal, Context, Constraints), infer reasonable defaults only if the user delegates them or context determines them. Record every material inference as an assumption under Section W.
 5. Review full intake rules: call `view_file` on [stages/stage_0.md](./stages/stage_0.md).
 
 ### Step 1: Specify Intent and Context
@@ -132,22 +164,34 @@ Execute the following sequence. Backtrack to revise earlier stages whenever late
 ### Step 15: Select and Defend Pedagogical Approach
 1. Call `view_file` on [stages/stage_15.md](./stages/stage_15.md).
 2. Select instructional frameworks (e.g., Deliberate Practice, Problem-Based Learning, Mastery Learning).
-3. Defend your choice by explaining its fit to the diagnosed problem and its impact on activities, progression, and evidence.
+3. Defend your choice by explaining its fit to the diagnosed problem and its direct input into Stages 16 and 17.
 
-### Step 16: Translate to Game-Design Requirements
+### Step 16: Specify Learning Experience Requirements
 1. Call `view_file` on [stages/stage_16.md](./stages/stage_16.md).
-2. Translate pedagogy into functional requirements for the game designer (`GDR-01`, `GDR-02`, ...): answer *"What must the game allow the learner to do for learning to occur?"*
-3. Specify interaction requirements, challenge rules, consequence behaviors, and progression gating.
+2. Determine educational experience parameters (learner agency, controlled discovery, experimentation, uncertainty, consequence-driven learning, progressive challenge).
+3. **Do not prescribe game mechanics or visuals**: Describe what the learner must experience educationally, not what the game looks like.
+4. Document pedagogical purpose, objectives supported, expected behavior, progression impact, and game-design implications for each experience requirement.
 
-### Step 17: Derive Game-Form Requirements & Prepare Handoff
+### Step 17: Specify Learning Environment Requirements
 1. Call `view_file` on [stages/stage_17.md](./stages/stage_17.md).
+2. Determine environmental paradigm (abstract, contextualized, dynamic simulation, controlled sandbox).
+3. **Justify contextual fidelity**: Demand realism only where educationally necessary; do not design spaceship cockpits or decorative game worlds.
+4. Specify required manipulable elements, observable causal states, and environmental constraints.
+
+### Step 18: Translate to Game-Design Requirements
+1. Call `view_file` on [stages/stage_18.md](./stages/stage_18.md).
+2. Translate pedagogy, experience, and environment into functional requirements for the game designer (`GDR-01`, `GDR-02`, ...): answer *"What must the game allow the learner to do for learning to occur?"*
+3. Specify interaction requirements, challenge rules, consequence behaviors, progression gating, experience implementation, and environmental affordances.
+
+### Step 19: Derive Game-Form Requirements & Prepare Handoff
+1. Call `view_file` on [stages/stage_19.md](./stages/stage_19.md).
 2. Map required interactions to candidate game forms and recommend a form with pedagogical justification.
 3. Clearly separate non-negotiable pedagogical requirements from flexible creative zones left for the game designer.
 
-### Step 18: Assemble Final Plan Using Static Output Schema
-1. Call `view_file` on [stages/stage_18.md](./stages/stage_18.md).
+### Step 20: Assemble Final Plan Using Static Output Schema
+1. Call `view_file` on [stages/stage_20.md](./stages/stage_20.md).
 2. Compile the full Learning Plan.
-3. **Enforce the 22-Section Static Schema**: Structure the deliverable using the exact sections A through V without renaming, reordering, combining, or omitting any section:
+3. **Enforce the 24-Section Static Schema**: Structure the deliverable using the exact sections A through X without renaming, reordering, combining, or omitting any section:
    - **A**: Learning Plan Metadata
    - **B**: Audience and Context
    - **C**: Learning Problem
@@ -164,19 +208,22 @@ Execute the following sequence. Backtrack to revise earlier stages whenever late
    - **N**: Evidence of Learning
    - **O**: Transfer Requirements
    - **P**: Pedagogical Approach
-   - **Q**: Game-Design Requirements
-   - **R**: Game-Form Requirements
-   - **S**: Game Designer Handoff
-   - **T**: Traceability Matrix (`Goal → LO → Content → ACT → Evidence → GDR`)
-   - **U**: Assumptions and Design Decisions
-   - **V**: Pedagogical Validation
-4. Complete the full Traceability Matrix ensuring 100% of LOs and GDRs are traced end-to-end.
+   - **Q**: Learning Experience Requirements
+   - **R**: Learning Environment Requirements
+   - **S**: Game-Design Requirements
+   - **T**: Game-Form Requirements
+   - **U**: Game Designer Handoff
+   - **V**: Traceability Matrix
+   - **W**: Assumptions and Design Decisions
+   - **X**: Pedagogical Validation
+4. In Section V, complete the full Traceability Matrix ensuring end-to-end alignment across all eight dimensions:
+   $$\mathbf{Goal} \longrightarrow \mathbf{LO} \longrightarrow \mathbf{Content} \longrightarrow \mathbf{ACT} \longrightarrow \mathbf{Experience} \longrightarrow \mathbf{Environment} \longrightarrow \mathbf{Evidence} \longrightarrow \mathbf{GDR}$$
 
-### Step 19: Execute Quality Validation & Completion Audit
-1. Call `view_file` on [stages/stage_19.md](./stages/stage_19.md).
-2. Audit the completed plan against the **40-Point Validation Checklist**.
-3. Verify that all **18 Completion Criteria** are satisfied.
-4. Confirm that **none of the 14 Failure Conditions** are present.
+### Step 21: Execute Quality Validation & Completion Audit
+1. Call `view_file` on [stages/stage_21.md](./stages/stage_21.md).
+2. Audit the completed plan against the **53-Point Validation Checklist**.
+3. Verify that all **23 Completion Criteria** are satisfied.
+4. Confirm that **none of the 18 Failure Conditions** are present.
 5. Finalize and deliver the validated learning plan to the user.
 
 ---
@@ -184,6 +231,8 @@ Execute the following sequence. Backtrack to revise earlier stages whenever late
 ## Operating Rules to Enforce At All Times
 
 1. **Never Invent the Audience**: Always obtain demographic and prior knowledge baselines from the user or prompt.
-2. **No Pedagogical Drift**: Every item in content, activities, feedback, and game requirements must trace directly back to an `LO-xx`.
+2. **Preserve Complete Traceability**: Every content item, activity, experience requirement, environment requirement, feedback rule, and game requirement must trace directly back to an `LO-xx`.
 3. **Respect Separation of Concerns**: You are the Pedagogy Engineer, not the Game Designer. Provide clear functional boundaries and allow the game designer creative freedom on narrative, visuals, sound, and low-level mechanics.
-4. **Iterate When Blocked**: If an objective cannot be evidenced in Stage 13 or translated in Stage 16, immediately backtrack to revise the objective in Stage 4.
+4. **Iterate When Blocked**: If an objective cannot be evidenced in Step 13 or translated in Step 18, immediately backtrack to revise the objective in Step 4.
+5. **The Governing Question**: At every step, verify:
+   > *"What does the learner need to become capable of doing, how should they learn it, what should they experience, what must the learning environment enable, and what must the eventual game support in order for that learning to occur?"*

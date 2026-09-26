@@ -1,69 +1,52 @@
-# Stage 17: Game-Form Requirements & Handoff Preparation
+# Stage 17: Learning Environment Requirements
 
-Derive the required game form from interaction requirements and prepare the pedagogical boundaries for handoff to the game designer.
-
----
-
-## 1. The Game-Form Derivation Rule
-
-> [!CAUTION]
-> **Strict Anti-Genre Rule**:
-> Genre or game form must **never** be the starting point. Never pick a genre simply because the topic is science or math.
-
-The game form must be derived strictly via this chain:
-
-$$\mathbf{Goal} \longrightarrow \mathbf{Objectives} \longrightarrow \mathbf{Target\ Performance} \longrightarrow \mathbf{Activities} \longrightarrow \mathbf{Interactions} \longrightarrow \mathbf{Game\ Form}$$
+Determine what environmental characteristics, manipulable elements, and contextual fidelity are required for the learning process.
 
 ---
 
-## 2. Interaction Models to Game Forms
+## 1. Mandatory Directives
 
-1. **Map Core Interaction Models**:
-   - *Direct Manipulation / Sandbox*: Experimenting with physical or systemic variables.
-   - *Diagnostic / Investigative*: Inspecting symptoms, questioning witnesses, running tests.
-   - *Strategic / Resource Management*: Allocating constrained assets under trade-offs.
-   - *Puzzle / Construction*: Assembling components according to formal constraints.
-   - *Scenario / Branching Decision*: Navigating high-stakes human or organizational choices.
+> [!IMPORTANT]
+> **Define Functional Affordances, NOT Game Worlds**:
+> Specify what the environment must **enable and simulate**, NOT its decorative or cosmetic layout.
+> - *Pedagogical Requirement (Correct)*: "The environment must provide an interactive representation where variables X, Y, and Z can be manipulated dynamically and their causal impact on system throughput is immediately observable."
+> - *Game World Design (Forbidden)*: "Place three wooden switches on the left console of a futuristic steam locomotive."
 
-2. **Evaluate Candidate Game Forms**:
-   - Puzzle, Simulation, Adventure/Investigation, Strategy/Tycoon, Scenario-based, Sandbox/Builder, Hybrid.
-   - Select or recommend the form whose fundamental verbs match the learning activities.
+Answer this core question:
+> **"What must the learning environment afford, simulate, or provide so that the learner can execute the required activities and achieve the objectives?"**
 
----
-
-## 3. Game Designer Handoff Boundaries
-
-To ensure effective collaboration, establish clear jurisdictional boundaries:
-
-### What the Pedagogy MUST Dictate to the Game Designer:
-* What must be learned, why, and who the learners are;
-* Exact capabilities learners must demonstrate;
-* Content boundaries (core vs. excluded);
-* Cognitive depth and progression sequencing;
-* Support, scaffolding, and fading requirements;
-* Diagnostic feedback and consequence requirements;
-* Valid evidence of learning and assessment rubrics;
-* Required interaction verbs and recommended game form.
-
-### What the Pedagogy MUST NOT Prescribe (Designer's Territory):
-* Full game concept, themes, or story lore;
-* Narrative characters and scripts;
-* Art style, visual assets, animations, or audio design;
-* Specific UI layouts, menus, or HUD styling;
-* Engine selection, code architecture, or technical implementation;
-* Precise minute-by-minute level design or balance curves.
+### The Contextual Fidelity Rule
+* Do **NOT** assume that high graphical or narrative realism is always pedagogically superior. High fidelity can increase cognitive load and distract from core principles.
+* Specify **contextual fidelity only where educationally necessary** (e.g. realistic multimeter displays for electrical apprentices vs. abstract schematic nodes for conceptual physics).
+* Rigorously justify any demand for environmental authenticity against transfer requirements (Stage 14).
 
 ---
 
-## 4. Required Output Format
+## 2. Environmental Types & Capabilities to Specify
+
+Determine the environmental paradigm:
+* **Abstract / Minimalist**: Uncluttered representation isolating target variables.
+* **Contextualized / Authentic**: Realistic simulation mirroring actual workplace or domain conditions.
+* **Dynamic Simulation**: Continuous causal model responding to learner input in real time.
+* **Controlled Sandbox**: Safe parameter ranges preventing unrecoverable deadlocks.
+* **Variable / Adaptive**: Changing environmental noise, failure rates, or constraint combinations.
+
+---
+
+## 3. Required Output Format
+
+For every major environment requirement, specify all eight fields:
 
 ```markdown
-### 17. Game-Form Requirements & Handoff
-- **Core Interaction Model**: [e.g., Diagnostic & Simulation-driven sandbox]
-- **Candidate Game Forms**: [Evaluated genres, e.g. Inspection Puzzle, Circuit Simulator, Narrative Triage]
-- **Recommended Game Form**: [Primary recommendation with detailed pedagogical justification]
-- **Key Game-Form Characteristics**: [Essential mechanical affordances required]
-- **Non-Negotiable Pedagogical Requirements**: [Absolute red lines the game design must respect]
-- **Flexible Design Space for Designer**: [Art, story, setting, exact mechanics open for creative freedom]
-- **Open Questions for Game Designer**: [Key trade-offs or design challenges delegated to designer]
+### 17. Learning Environment Requirements
+
+#### ENV-01: [Environment Requirement Name, e.g., Dynamic Circuit Simulation Canvas]
+- **Environmental Characteristic**: [Abstract / Contextualized / High-Fidelity Simulation]
+- **Pedagogical Purpose**: [Why this environment is essential for the learning process]
+- **Objectives Supported**: [Exact LO-xx mappings]
+- **Learner Actions Enabled**: [Specific actions enabled, e.g. wire components, inject current, measure voltage]
+- **Required Contextual Fidelity**: [Minimal / Moderate / High, with explicit pedagogical justification]
+- **Manipulable Elements**: [Exact variables, parameters, or objects the learner can alter]
+- **Observable States & Consequences**: [Causal reactions, readouts, meter movements, or failure states]
+- **Implications for Transfer**: [How this environment prepares the learner for real-world application]
 ```
