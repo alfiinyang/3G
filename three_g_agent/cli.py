@@ -20,8 +20,10 @@ from typing import Optional
 from .agent import ThreeGAgent
 from .config import ClientParameterCollector, ThreeGAgentConfig, resolve_default_agent_id
 from .creator import AgentCreationSpec, AgentCreator
+from .deletion import AgentDeletionManager, DeletionResult
 from .initializer import AgentClientInitializer, InitializedClient
-from .registry import AgentRecord, AgentRegistry, ConversationSession, validate_agent_id
+from .registry import AgentRegistry, ConversationSession, validate_agent_id
+from .status import TurnStatusReporter
 
 
 # Ensure stdout handles UTF-8 on Windows
@@ -121,6 +123,23 @@ def build_parser() -> argparse.ArgumentParser:
         default="pedagogy-engineering",
         help="Name of skill when using --stage (default: pedagogy-engineering)",
     )
+    parser.add_argument(
+        "--delete-agent",
+        type=str,
+        default=None,
+        help="Delete an agent and its recorded sessions according to Antigravity SDK procedure.",
+    )
+    parser.add_argument(
+        "--delete-interaction",
+        type=str,
+        default=None,
+        help="Delete an interaction / conversation session according to Antigravity SDK procedure.",
+    )
+    parser.add_argument(
+        "--no-status",
+        action="store_true",
+        help="Disable real-time terminal status reporting while waiting for agent responses.",
+    )
     return parser
 
 
@@ -163,76 +182,206 @@ def prompt_for_agent_creation(
     result = AgentCreator.create_agent(
         spec=spec,
         client_handle=client_handle,
-        registry=registry,
     )
 
     print("\n" + "=" * 65)
-    print(f"  [+] Agent '{result.agent_id}' Successfully Created and Registered!")
+    print(f"  [+] Agent '{result.agent_id}' Successfully Created on Antigravity SDK API!")
     print("=" * 65)
     print(f"  Pre-loaded Skills      : {result.skills_count} package(s) ({result.stages_count} stages/auxiliary files)")
-    print(f"  System Instructions    : {'Pre-loaded (' + str(result.instructions_length) + ' chars)' if result.has_instructions else 'None (empty instructions.md)'}")
+    print(f"  System Instructions    : {'Pre-loaded (' + str(result.instructions_length) + ' chars)' if result.has_instructions else 'None'}")
     print(f"  Remote Engine          : antigravity-preview-09-2026")
-    print(f"  Local Registry Record  : Confirmed in {registry.registry_file.name}")
+    print(f"  API Dispatch           : client.agents.create(**kwargs) [SDK API]")
     print("=" * 65)
 
     return result.agent_id
 
 
-def prompt_for_agent_reuse(registry: AgentRegistry) -> Optional[str]:
-    """Displays existing agents and prompts user to select one."""
-    agents = registry.list_agents()
+def prompt_for_agent_reuse(client_handle: InitializedClient) -> Optional[str]:
+    """Displays existing agents fetched directly from Antigravity SDK API (client.agents.list)."""
+    agents = AgentCreator.list_agents(client_handle)
     if not agents:
-        print("\n[-] No existing agents found in registry.")
+        print("\n[-] No existing agents found on Antigravity SDK API (client.agents.list).")
         return None
 
     print("\n" + "-" * 65)
-    print("  Existing Registered Antigravity Agents")
+    print("  Antigravity SDK API: Registered Remote Agents (client.agents.list)")
     print("-" * 65)
     for idx, ag in enumerate(agents, 1):
-        conv_count = len(ag.conversations)
-        skills_str = ", ".join(ag.skills_names) or "none"
-        print(f"  [{idx}] ID: {ag.agent_id}")
-        print(f"      - Created       : {ag.created_at[:19]}")
-        print(f"      - Pre-loaded    : {len(ag.skills_names)} skill(s) [{skills_str}]")
-        print(f"      - Conversations : {conv_count} recorded session(s)")
+        ag_id = getattr(ag, "id", str(ag))
+        base_agent = getattr(ag, "base_agent", "antigravity-preview-09-2026")
+        desc = getattr(ag, "description", "") or "No description"
+        print(f"  [{idx}] ID: {ag_id}")
+        print(f"      - Base Engine : {base_agent}")
+        print(f"      - Description : {desc}")
 
     while True:
         choice = input(f"\nSelect agent [1-{len(agents)}] or enter Agent ID: ").strip()
         if not choice:
             continue
         if choice.isdigit() and 1 <= int(choice) <= len(agents):
-            return agents[int(choice) - 1].agent_id
+            selected = agents[int(choice) - 1]
+            return getattr(selected, "id", str(selected))
         # Check direct agent ID match
         clean_choice = choice.replace("[", "").replace("]", "").strip()
-        matched = next((a for a in agents if a.agent_id == clean_choice), None)
+        matched = next((a for a in agents if getattr(a, "id", str(a)) == clean_choice), None)
         if matched:
-            return matched.agent_id
+            return getattr(matched, "id", str(matched))
         print(f"[!] Invalid selection '{choice}'. Please pick a number from 1 to {len(agents)}.")
 
 
-def handle_conversation_selection(agent: ThreeGAgent) -> None:
-    """Prompts user to choose between starting a new chat or resuming an existing conversation."""
-    conversations = agent.list_conversations()
-    print("\n" + "-" * 65)
-    print(f"  Conversation Management for Agent: '{agent.config.agent_id}'")
-    print("-" * 65)
-
-    if not conversations:
-        print("  [+] No existing conversations found for this agent.")
-        print("  [+] Starting a fresh conversation (new remote sandbox environment will be provisioned).")
-        agent.start_new_chat()
+def prompt_for_agent_deletion(
+    client_handle: InitializedClient,
+    registry: Optional[AgentRegistry] = None,
+) -> None:
+    """Interactively prompts user to select and delete an agent using Antigravity SDK procedure."""
+    agents = AgentCreator.list_agents(client_handle)
+    if not agents:
+        print("\n[-] No registered agents found on Antigravity SDK API to delete.")
         return
 
-    print("  [1] Start a New Chat (Provisions a fresh remote sandbox environment)")
-    for idx, c in enumerate(conversations, 2):
-        print(f"  [{idx}] Resume Conversation: {c.title}")
-        print(f"      - Session ID     : {c.session_id}")
-        print(f"      - Environment ID : {c.environment_id} (Holding for persistence)")
-        print(f"      - Turns Recorded : {c.turn_count} turn(s)")
-        print(f"      - Last Updated   : {c.updated_at[:19]}")
+    print("\n" + "-" * 65)
+    print("  Delete Antigravity Agent (SDK API Procedure: client.agents.delete)")
+    print("-" * 65)
+    for idx, ag in enumerate(agents, 1):
+        ag_id = getattr(ag, "id", str(ag))
+        base_agent = getattr(ag, "base_agent", "antigravity-preview-09-2026")
+        desc = getattr(ag, "description", "") or "No description"
+        print(f"  [{idx}] ID: {ag_id} | Base: {base_agent} | {desc}")
+    print("  [C] Cancel / Return to setup menu")
 
     while True:
-        choice = input(f"\nSelect conversation option [1-{len(conversations) + 1}]: ").strip()
+        choice = input(f"\nSelect agent to delete [1-{len(agents)}] or enter Agent ID ('c' to cancel): ").strip()
+        if not choice:
+            continue
+        if choice.lower() in ("c", "cancel"):
+            print("[+] Deletion cancelled.")
+            return
+
+        target_agent_id = None
+        if choice.isdigit() and 1 <= int(choice) <= len(agents):
+            target_agent = agents[int(choice) - 1]
+            target_agent_id = getattr(target_agent, "id", getattr(target_agent, "agent_id", str(target_agent)))
+        else:
+            clean_choice = choice.replace("[", "").replace("]", "").strip()
+            matched = next(
+                (a for a in agents if getattr(a, "id", getattr(a, "agent_id", str(a))) == clean_choice),
+                None,
+            )
+            if matched:
+                target_agent_id = getattr(matched, "id", getattr(matched, "agent_id", str(matched)))
+
+        if not target_agent_id:
+            print(f"[!] Invalid selection '{choice}'. Please pick a valid agent number or ID.")
+            continue
+
+        confirm = input(f"\nConfirm: Delete agent '{target_agent_id}' via Antigravity SDK procedure? [y/N]: ").strip().lower()
+        if confirm in ("y", "yes"):
+            print(f"\n[>] Executing Antigravity SDK deletion for agent '{target_agent_id}'...")
+            result = AgentDeletionManager.delete_agent(
+                agent_id=target_agent_id,
+                client=client_handle.client,
+                registry=registry,
+                state_dir=registry.state_dir,
+            )
+            AgentDeletionManager.display_result(result)
+        else:
+            print("[+] Deletion aborted by user.")
+        return
+
+
+def prompt_for_interaction_deletion(
+    client_handle: InitializedClient,
+    registry: AgentRegistry,
+) -> None:
+    """Interactively prompts user to select and delete an interaction/session using Antigravity SDK."""
+    sessions_list = []
+    for sess in registry.list_all_sessions():
+        sessions_list.append((sess.agent_id, sess))
+
+    if not sessions_list:
+        print("\n[-] No recorded conversation sessions or interactions found to delete.")
+        return
+
+    print("\n" + "-" * 65)
+    print("  Delete Interaction / Conversation Session (Antigravity SDK Procedure)")
+    print("-" * 65)
+    for idx, (ag_id, s) in enumerate(sessions_list, 1):
+        inter_info = f" | Interaction: {s.last_interaction_id}" if s.last_interaction_id else ""
+        print(f"  [{idx}] Agent: '{ag_id}' | Session ID: {s.session_id}")
+        print(f"      - Title          : {s.title}")
+        print(f"      - Environment ID : {s.environment_id}{inter_info}")
+        print(f"      - Turns          : {s.turn_count} turn(s) | Last: {s.updated_at[:19]}")
+    print("  [C] Cancel / Return to setup menu")
+
+    while True:
+        choice = input(f"\nSelect interaction/session to delete [1-{len(sessions_list)}] ('c' to cancel): ").strip()
+        if not choice:
+            continue
+        if choice.lower() in ("c", "cancel"):
+            print("[+] Deletion cancelled.")
+            return
+
+        target_pair = None
+        if choice.isdigit() and 1 <= int(choice) <= len(sessions_list):
+            target_pair = sessions_list[int(choice) - 1]
+        else:
+            clean_choice = choice.strip()
+            for ag_id, s in sessions_list:
+                if s.session_id == clean_choice or s.last_interaction_id == clean_choice:
+                    target_pair = (ag_id, s)
+                    break
+
+        if not target_pair:
+            print(f"[!] Invalid selection '{choice}'. Please pick a valid number or ID.")
+            continue
+
+        target_agent_id, target_session = target_pair
+        confirm = input(
+            f"\nConfirm: Delete session '{target_session.session_id}' via Antigravity SDK? [y/N]: "
+        ).strip().lower()
+        if confirm in ("y", "yes"):
+            print(f"\n[>] Executing Antigravity SDK deletion for session '{target_session.session_id}'...")
+            result = AgentDeletionManager.delete_conversation_session(
+                agent_id=target_agent_id,
+                session_id=target_session.session_id,
+                client=client_handle.client,
+                registry=registry,
+                state_dir=registry.state_dir,
+            )
+            AgentDeletionManager.display_result(result)
+        else:
+            print("[+] Deletion aborted by user.")
+        return
+
+
+def handle_conversation_selection(
+    agent: ThreeGAgent,
+    client_handle: Optional[InitializedClient] = None,
+    registry: Optional[AgentRegistry] = None,
+) -> None:
+    """Prompts user to choose between starting a new chat, resuming, or deleting conversations."""
+    while True:
+        conversations = agent.list_conversations()
+        print("\n" + "-" * 65)
+        print(f"  Conversation Management for Agent: '{agent.config.agent_id}'")
+        print("-" * 65)
+
+        if not conversations:
+            print("  [+] No existing conversations found for this agent.")
+            print("  [+] Starting a fresh conversation (new remote sandbox environment will be provisioned).")
+            agent.start_new_chat()
+            return
+
+        print("  [1] Start a New Chat (Provisions a fresh remote sandbox environment)")
+        for idx, c in enumerate(conversations, 2):
+            print(f"  [{idx}] Resume Conversation: {c.title}")
+            print(f"      - Session ID     : {c.session_id}")
+            print(f"      - Environment ID : {c.environment_id} (Holding for persistence)")
+            print(f"      - Turns Recorded : {c.turn_count} turn(s)")
+            print(f"      - Last Updated   : {c.updated_at[:19]}")
+        print("  [D] Delete a conversation interaction (Antigravity SDK procedure)")
+
+        choice = input(f"\nSelect conversation option [1-{len(conversations) + 1}] or 'd' to delete: ").strip()
         if not choice:
             continue
         if choice == "1":
@@ -246,7 +395,14 @@ def handle_conversation_selection(agent: ThreeGAgent) -> None:
                 print(f"\n[+] Successfully resumed conversation '{selected_session.session_id}'!")
                 print(f"[+] Holding Environment ID '{selected_session.environment_id}' for persistence.")
             break
-        print(f"[!] Please select a valid option between 1 and {len(conversations) + 1}.")
+        if choice.lower() in ("d", "delete"):
+            if client_handle and registry:
+                prompt_for_interaction_deletion(client_handle=client_handle, registry=registry)
+                continue
+            else:
+                print("[-] Deletion not available without client handle.")
+                continue
+        print(f"[!] Please select a valid option between 1 and {len(conversations) + 1}, or 'd'.")
 
 
 def main() -> int:
@@ -303,16 +459,41 @@ def main() -> int:
         print(f"\n[!] Client Initialization Failed: {init_err}", file=sys.stderr)
         return 1
 
+    # Direct CLI Deletion Flags
+    if args.delete_agent:
+        print(f"\n[>] Executing Antigravity SDK deletion for agent '{args.delete_agent}'...")
+        res = AgentDeletionManager.delete_agent(
+            agent_id=args.delete_agent,
+            client=initialized_client.client,
+            registry=registry,
+            state_dir=state_dir,
+        )
+        AgentDeletionManager.display_result(res)
+        return 0 if res.success else 1
+
+    if args.delete_interaction:
+        print(f"\n[>] Executing Antigravity SDK deletion for interaction '{args.delete_interaction}'...")
+        res = AgentDeletionManager.delete_interaction(
+            interaction_id=args.delete_interaction,
+            client=initialized_client.client,
+            registry=registry,
+            state_dir=state_dir,
+        )
+        AgentDeletionManager.display_result(res)
+        return 0 if res.success else 1
+
     # Status only
     if args.status:
-        agents = registry.list_agents()
-        print(f"\nRegistered Agents ({len(agents)}):")
+        agents = AgentCreator.list_agents(initialized_client)
+        print(f"\nRegistered Agents on Antigravity SDK API ({len(agents)}):")
         for ag in agents:
-            print(f"  - {ag.agent_id} ({len(ag.skills_names)} skills, {len(ag.conversations)} conversations)")
+            ag_id = getattr(ag, "id", str(ag))
+            desc = getattr(ag, "description", "") or "No description"
+            print(f"  - {ag_id}: {desc}")
         return 0
 
     # -------------------------------------------------------------
-    # 2. AGENT SELECTION: CREATE OR REUSE AGENT
+    # 2. AGENT SELECTION: CREATE, REUSE, OR DELETE AGENT AT SETUP
     # -------------------------------------------------------------
     chosen_agent_id: Optional[str] = None
 
@@ -325,14 +506,17 @@ def main() -> int:
             chosen_agent_id = cli_specified_agent.strip()
 
     if not chosen_agent_id and is_interactive:
-        print("\n" + "=" * 65)
-        print("  Antigravity Agent Management")
-        print("=" * 65)
-        print("  [1] Create a new agent (pre-loads skills and instructions)")
-        print("  [2] Reuse an existing agent (retains environment session)")
-
         while True:
-            choice = input("\nSelect an option [1 or 2]: ").strip()
+            print("\n" + "=" * 65)
+            print("  Antigravity Agent Management & Setup (SDK API)")
+            print("=" * 65)
+            print("  [1] Create a new agent (via Antigravity SDK API)")
+            print("  [2] Reuse an existing agent (from Antigravity SDK API)")
+            print("  [3] Delete an agent (Antigravity SDK API procedure)")
+            print("  [4] Delete an interaction / session (Antigravity SDK procedure)")
+            print("  [5] Exit setup")
+
+            choice = input("\nSelect setup option [1-5]: ").strip()
             if choice == "1":
                 chosen_agent_id = prompt_for_agent_creation(
                     skills_path=skills_path,
@@ -342,7 +526,7 @@ def main() -> int:
                 )
                 break
             elif choice == "2":
-                reused = prompt_for_agent_reuse(registry)
+                reused = prompt_for_agent_reuse(initialized_client)
                 if reused:
                     chosen_agent_id = reused
                     break
@@ -356,8 +540,15 @@ def main() -> int:
                         registry=registry,
                     )
                     break
+            elif choice == "3":
+                prompt_for_agent_deletion(client_handle=initialized_client, registry=registry)
+            elif choice == "4":
+                prompt_for_interaction_deletion(client_handle=initialized_client, registry=registry)
+            elif choice == "5":
+                print("Setup finished. Exiting.")
+                return 0
             else:
-                print("[!] Please enter '1' to create a new agent or '2' to reuse an existing agent.")
+                print("[!] Please enter a number between 1 and 5.")
 
     if not chosen_agent_id:
         chosen_agent_id = resolve_default_agent_id()
@@ -374,13 +565,6 @@ def main() -> int:
             state_dir=state_dir,
             output_dir=output_dir,
         )
-        # Ensure agent is registered in local registry
-        if not registry.get_agent(chosen_agent_id):
-            registry.register_agent(
-                agent_id=chosen_agent_id,
-                description=f"Agent initialized with skills from {skills_path.name}",
-                skills_names=[s.name for s in agent.skills.skills],
-            )
     except Exception as e:
         print(f"\n[!] Failed to assemble agent '{chosen_agent_id}': {e}", file=sys.stderr)
         return 1
@@ -394,11 +578,13 @@ def main() -> int:
     # 4. REUSING AGENTS: CHOOSE NEW CHAT OR EXISTING CONVERSATION
     # -------------------------------------------------------------
     if is_interactive:
-        handle_conversation_selection(agent)
+        handle_conversation_selection(agent, client_handle=initialized_client, registry=registry)
 
     # -------------------------------------------------------------
     # 5. EXECUTION: SINGLE PROMPT, STAGE, OR INTERACTIVE LOOP
     # -------------------------------------------------------------
+    show_status = not args.no_status
+
     if args.stage:
         stage_input = prompt_str or "Proceed with stage execution using provided context."
         print(f"\n[>] Executing Skill Stage: {args.skill_name} / {args.stage}...")
@@ -408,6 +594,7 @@ def main() -> int:
                 stage_identifier=args.stage,
                 stage_input=stage_input,
                 save_output_as=f"{args.skill_name}_{args.stage}_output.md",
+                show_status=show_status,
             )
             print("\n--- Output ---")
             print(response.output_text)
@@ -424,7 +611,7 @@ def main() -> int:
     if prompt_str:
         print(f"\n[>] Executing Prompt for agent '{chosen_agent_id}': {prompt_str}...")
         try:
-            response = agent.execute(prompt_str)
+            response = agent.execute(prompt_str, show_status=show_status)
             print("\n--- Output ---")
             print(response.output_text)
             print(f"\nEnvironment ID: {response.environment_id}")
@@ -444,7 +631,7 @@ def main() -> int:
     print(f"  Session ID    : {agent.active_session_id or 'New Unsaved Session'}")
     print(f"  Environment ID: {active_env_id}")
     print(f"  Local Storage : {output_dir}")
-    print("  Type 'exit' to quit, '/reset' to clear sandbox container.")
+    print("  Type 'exit' to quit, '/reset' to clear container, '/delete' to delete session.")
     print("  (Type your instructions directly without needing quotation marks)")
     print("=" * 65)
 
@@ -464,8 +651,18 @@ def main() -> int:
                 agent.reset_environment()
                 print("[+] Environment reset. Next turn will spawn a fresh remote container.")
                 continue
+            if user_msg.lower() in ("/delete", "/delete-session"):
+                if agent.active_session_id:
+                    curr_sess = agent.active_session_id
+                    print(f"\n[>] Deleting session '{curr_sess}' via Antigravity SDK...")
+                    del_res = agent.delete_conversation_session(curr_sess)
+                    AgentDeletionManager.display_result(del_res)
+                    print("[+] Session cleared. Next turn will start a fresh conversation.")
+                else:
+                    print("[!] No active session to delete.")
+                continue
 
-            response = agent.chat(user_msg)
+            response = agent.chat(user_msg, show_status=show_status)
             print("\n" + response.output_text)
             print(f"\n[Held Environment ID: {response.environment_id} | Session: {response.session_id}]")
             if response.saved_files:

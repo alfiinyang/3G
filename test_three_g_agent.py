@@ -24,6 +24,12 @@ from three_g_agent import (
     EnvironmentStore,
     SkillLoader,
     FileStorageManager,
+    AgentRegistry,
+    AgentDeletionManager,
+    AgentCreationSpec,
+    AgentCreator,
+    TurnStatusReporter,
+    validate_agent_id,
 )
 
 
@@ -276,13 +282,20 @@ End of document.
                 validate_agent_id(bad_id)
 
     def test_standalone_agent_creator(self):
-        """Test standalone AgentCreator module with skill and instructions pre-loading."""
+        """Test standalone AgentCreator module with skill and instructions pre-loading directly to SDK API."""
         from three_g_agent.creator import AgentCreationSpec, AgentCreator
-        from three_g_agent.registry import AgentRegistry
+        from three_g_agent.initializer import AgentClientInitializer
+        from three_g_agent.config import ThreeGAgentConfig
 
-        registry = AgentRegistry(state_dir=self.state_dir)
         test_instr = self.temp_dir / "instructions.md"
         test_instr.write_text("Elite script creation agent prompt.", encoding="utf-8")
+
+        config = ThreeGAgentConfig(
+            skills_dir=Path("./skills"),
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+        client_handle = AgentClientInitializer.initialize(config, interactive_prompt=False)
 
         spec = AgentCreationSpec(
             agent_id="coder-99999",
@@ -290,18 +303,27 @@ End of document.
             instructions_file=test_instr,
             description="Testing standalone creator",
         )
-        result = AgentCreator.create_agent(spec=spec, registry=registry)
+        result = AgentCreator.create_agent(spec=spec, client_handle=client_handle)
 
         self.assertEqual(result.agent_id, "coder-99999")
         self.assertGreater(result.skills_count, 0)
         self.assertTrue(result.has_instructions)
         self.assertGreater(result.instructions_length, 0)
+        self.assertIsNotNone(result.remote_agent)
 
-        # Verify it was persisted in the registry
-        saved_record = registry.get_agent("coder-99999")
-        self.assertIsNotNone(saved_record)
-        self.assertEqual(saved_record.agent_id, "coder-99999")
-        self.assertTrue(saved_record.has_instructions)
+        # Verify it was created directly on the SDK API (client.agents.get / client.agents.list)
+        remote_agent = AgentCreator.get_agent("coder-99999", client_handle=client_handle)
+        self.assertIsNotNone(remote_agent)
+        self.assertEqual(getattr(remote_agent, "id", None), "coder-99999")
+
+        # Verify listing agents from SDK API includes the new agent
+        all_remote_agents = AgentCreator.list_agents(client_handle=client_handle)
+        agent_ids = [getattr(a, "id", str(a)) for a in all_remote_agents]
+        self.assertIn("coder-99999", agent_ids)
+
+        # Verify zero local storage: no local agent registry file exists
+        local_agent_file = self.state_dir / "agents_registry.json"
+        self.assertFalse(local_agent_file.exists())
 
     def test_agent_registry_and_conversation_persistence(self):
         """Test reusing existing agent and holding environment_id across conversations."""
@@ -359,7 +381,120 @@ End of document.
         self.assertIsNone(agent.active_session_id)
         self.assertIsNone(agent.get_environment_id())
 
+    def test_turn_status_reporter(self):
+        """Test real-time turn status reporting across all phases."""
+        recorded_events = []
+
+        def callback(phase, detail):
+            recorded_events.append((phase, detail))
+
+        reporter = TurnStatusReporter(enabled=True, callback=callback)
+        with reporter:
+            reporter.thinking("Analyzing user instructions...")
+            reporter.skill_use("pedagogy-engineering", stage="stage_0")
+            reporter.tool_call("code_execution", args_summary="script.py")
+            reporter.tool_result("code_execution", result_summary="Success")
+            reporter.environment("Holding container env_test_123")
+            reporter.responding("Streaming final output...")
+
+        phases = [p for p, _ in recorded_events]
+        self.assertIn("Thinking", phases)
+        self.assertIn("Skill Use", phases)
+        self.assertIn("Tool Call", phases)
+        self.assertIn("Tool Result", phases)
+        self.assertIn("Environment", phases)
+        self.assertIn("Responding", phases)
+
+    def test_agent_deletion_manager_and_sdk_procedure(self):
+        """Test Antigravity SDK procedure for deleting interactions and agents."""
+        registry = AgentRegistry(state_dir=self.state_dir)
+        test_agent_id = "coder-99999"
+
+        # Initialize mock client
+        config = ThreeGAgentConfig(
+            skills_dir=Path("./skills"),
+            agent_id=test_agent_id,
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+        client_handle = AgentClientInitializer.initialize(config, interactive_prompt=False)
+
+        # Create agent directly on SDK API (client.agents.create)
+        spec = AgentCreationSpec(agent_id=test_agent_id)
+        AgentCreator.create_agent(spec=spec, client_handle=client_handle)
+
+        # Create session in local session registry
+        session = registry.create_conversation_session(
+            agent_id=test_agent_id,
+            environment_id="env_remote_delete_test",
+            title="Session for Deletion",
+        )
+        registry.update_conversation_session(
+            agent_id=test_agent_id,
+            session_id=session.session_id,
+            last_interaction_id="inter_del_abc123",
+        )
+
+        # 1. Delete conversation session & held interaction via Antigravity SDK procedure
+        session_del_result = AgentDeletionManager.delete_conversation_session(
+            agent_id=test_agent_id,
+            session_id=session.session_id,
+            client=client_handle.client,
+            registry=registry,
+            state_dir=self.state_dir,
+        )
+        self.assertTrue(session_del_result.success)
+        self.assertTrue(session_del_result.local_deleted)
+        # Verify session is gone from registry
+        self.assertIsNone(registry.get_conversation_session(test_agent_id, session.session_id))
+
+        # 2. Delete agent via Antigravity SDK procedure (client.agents.delete)
+        agent_del_result = AgentDeletionManager.delete_agent(
+            agent_id=test_agent_id,
+            client=client_handle.client,
+            registry=registry,
+            state_dir=self.state_dir,
+        )
+        self.assertTrue(agent_del_result.success)
+        self.assertTrue(agent_del_result.remote_deleted)
+        # Verify agent is gone from SDK API
+        self.assertIsNone(AgentCreator.get_agent(test_agent_id, client_handle=client_handle))
+
+    def test_agent_deletion_convenience_methods(self):
+        """Test delete_conversation_session and delete_agent methods on ThreeGAgent."""
+        agent_id = "pedagogy-88888"
+        agent = ThreeGAgent.create(
+            skills_dir=Path("./skills"),
+            agent_id=agent_id,
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+
+        # Create agent on SDK API so it exists remotely
+        spec = AgentCreationSpec(agent_id=agent_id)
+        AgentCreator.create_agent(spec=spec, client_handle=agent.client)
+
+        session = agent.registry.create_conversation_session(
+            agent_id=agent_id,
+            environment_id="env_convenience_test",
+            title="Active Session",
+        )
+        agent.resume_conversation(session.session_id)
+        self.assertEqual(agent.active_session_id, session.session_id)
+
+        # Delete active session via agent method
+        del_sess_res = agent.delete_conversation_session()
+        self.assertTrue(del_sess_res.success)
+        self.assertIsNone(agent.active_session_id)
+
+        # Delete agent via agent method (client.agents.delete)
+        del_agent_res = agent.delete_agent()
+        self.assertTrue(del_agent_res.success)
+        self.assertTrue(del_agent_res.remote_deleted)
+        self.assertIsNone(AgentCreator.get_agent(agent_id, client_handle=agent.client))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

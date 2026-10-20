@@ -21,12 +21,14 @@ from three_g_agent import (
     AgentClientInitializer,
     AgentCreationSpec,
     AgentCreator,
+    AgentDeletionManager,
     AgentRegistry,
     ClientParameterCollector,
     EnvironmentStore,
     FileStorageManager,
     ThreeGAgent,
     ThreeGAgentConfig,
+    TurnStatusReporter,
     resolve_default_agent_id,
     validate_agent_id,
 )
@@ -71,9 +73,9 @@ def run_demonstration():
     AgentClientInitializer.display_success(initialized_client)
 
     # -------------------------------------------------------------
-    # 2. STANDALONE AGENT CREATION (Validate [name-id_num] & pre-load)
+    # 2. STANDALONE AGENT CREATION ON SDK API (client.agents.create)
     # -------------------------------------------------------------
-    print(f"\n[Step 2] Creating a New Agent using Standalone AgentCreator...")
+    print(f"\n[Step 2] Creating a New Agent directly on Antigravity SDK API (client.agents.create)...")
     registry = AgentRegistry(state_dir=state_dir)
     test_agent_id = "coder-12345"  # Adheres to [name-id_num] format
 
@@ -81,7 +83,7 @@ def run_demonstration():
     validated = validate_agent_id(test_agent_id)
     print(f"  [+] Format validated successfully: [{validated}]")
 
-    print(f"  Creating agent and pre-loading skills & instructions...")
+    print(f"  Dispatching creation directly to Antigravity SDK API (zero local storage)...")
     spec = AgentCreationSpec(
         agent_id=validated,
         skills_dir=skills_folder,
@@ -92,20 +94,22 @@ def run_demonstration():
     result = AgentCreator.create_agent(
         spec=spec,
         client_handle=initialized_client,
-        registry=registry,
     )
-    print(f"  [+] Agent '{result.agent_id}' Created!")
+    print(f"  [+] Agent '{result.agent_id}' Created on Antigravity SDK API!")
     print(f"      - Skills Pre-loaded : {result.skills_count} ({result.stages_count} stages)")
     print(f"      - System Prompt     : {'Loaded' if result.has_instructions else 'None (empty instructions.md)'}")
 
     # -------------------------------------------------------------
-    # 3. LIST EXISTING REGISTERED AGENTS
+    # 3. LIST EXISTING AGENTS DIRECTLY FROM SDK API (client.agents.list)
     # -------------------------------------------------------------
-    print(f"\n[Step 3] Querying Registered Agents...")
-    existing_agents = registry.list_agents()
-    print(f"  Found {len(existing_agents)} registered agent(s):")
+    print(f"\n[Step 3] Querying Agents directly from Antigravity SDK API (client.agents.list)...")
+    existing_agents = AgentCreator.list_agents(client_handle=initialized_client)
+    print(f"  Found {len(existing_agents)} agent(s) on Antigravity SDK API (zero local memory):")
     for ag in existing_agents:
-        print(f"    - ID: {ag.agent_id} | Created: {ag.created_at[:19]} | Convs: {len(ag.conversations)}")
+        ag_id = getattr(ag, "id", str(ag))
+        base_ag = getattr(ag, "base_agent", "antigravity-preview-09-2026")
+        desc = getattr(ag, "description", "") or "No description"
+        print(f"    - ID: {ag_id} | Base Engine: {base_ag} | {desc}")
 
     # -------------------------------------------------------------
     # 4. ASSEMBLE AGENT & MANAGE CONVERSATIONS (Holding environment_id)
@@ -164,6 +168,55 @@ class MillingController:
         print(f"    - Local Path : {f.local_path}")
         print(f"    - URI        : {f.file_uri}")
         print(f"    - Size       : {f.size_bytes} bytes")
+
+    # -------------------------------------------------------------
+    # 7. REAL-TIME TERMINAL STATUS REPORTING
+    # -------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("  [Step 7] Demonstrating Real-Time Terminal Status Reporting")
+    print("=" * 70)
+    print("  Simulating turn progression while user waits for agent response:")
+    reporter = TurnStatusReporter(enabled=True)
+    with reporter:
+        reporter.thinking("Analyzing instructions and formulating strategy...")
+        import time
+        time.sleep(0.3)
+        reporter.skill_use("pedagogy-engineering", stage="stage_0")
+        time.sleep(0.3)
+        reporter.tool_call("code_execution", args_summary="milling_controller.py")
+        time.sleep(0.3)
+        reporter.tool_result("code_execution", result_summary="Success")
+        time.sleep(0.3)
+        reporter.responding("Synthesizing final deliverable...")
+        time.sleep(0.3)
+        reporter.complete("Response generated")
+
+    # -------------------------------------------------------------
+    # 8. ANTIGRAVITY SDK DELETION PROCEDURES
+    # -------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("  [Step 8] Demonstrating Antigravity SDK Deletion Procedures")
+    print("=" * 70)
+    # Deleting interaction / conversation session
+    print(f"  Deleting conversation session '{session.session_id}' via SDK...")
+    sess_del_result = AgentDeletionManager.delete_conversation_session(
+        agent_id=validated,
+        session_id=session.session_id,
+        client=initialized_client.client,
+        registry=registry,
+        state_dir=state_dir,
+    )
+    AgentDeletionManager.display_result(sess_del_result)
+
+    # Deleting agent
+    print(f"\n  Deleting agent '{validated}' via Antigravity SDK...")
+    agent_del_result = AgentDeletionManager.delete_agent(
+        agent_id=validated,
+        client=initialized_client.client,
+        registry=registry,
+        state_dir=state_dir,
+    )
+    AgentDeletionManager.display_result(agent_del_result)
 
     print("\n" + "=" * 70)
     print("  All Architectural Requirements Verified Successfully! [OK]")

@@ -17,10 +17,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from .config import ClientParameterCollector, ThreeGAgentConfig
+from .deletion import AgentDeletionManager, DeletionResult
 from .environment import EnvironmentStore
 from .initializer import InitializedClient, ModelInitializer
 from .registry import AgentRegistry, ConversationSession
 from .skills import Skill, SkillLoader
+from .status import TurnStatusReporter
 from .storage import FileStorageManager, SavedFile
 
 logger = logging.getLogger("3G-agent")
@@ -157,21 +159,30 @@ class ThreeGAgent:
         force_fresh_environment: bool = False,
         additional_sources: Optional[List[Dict[str, Any]]] = None,
         save_deliverables_locally: bool = True,
+        status_reporter: Optional[TurnStatusReporter] = None,
+        show_status: bool = True,
     ) -> ThreeGAgentResponse:
-        """Executes an operation in the remote Antigravity sandbox.
+        """Executes an operation in the remote Antigravity sandbox with real-time status reporting.
         
         Args:
             prompt: User instructions or query for the agent.
             force_fresh_environment: If True, ignores previous environment ID and starts a fresh container.
             additional_sources: Optional extra inline files or data to mount.
             save_deliverables_locally: Whether to automatically extract and save generated files locally.
+            status_reporter: Optional custom status reporter instance.
+            show_status: Whether to display dynamic terminal status updates while waiting.
             
         Returns:
             ThreeGAgentResponse with output text, environment ID, and local saved file links.
         """
         logger.info("Executing 3G-agent turn...")
+        reporter = status_reporter or TurnStatusReporter(enabled=show_status)
+        reporter.start("Thinking", "Analyzing prompt...")
 
         # 1. Prepare remote sources from loaded skills & instructions
+        skill_names = [s.name for s in self.skills.skills]
+        if skill_names:
+            reporter.skill_use(", ".join(skill_names))
         remote_sources = self.skills.build_remote_sources()
         if additional_sources:
             remote_sources.extend(additional_sources)
@@ -192,6 +203,12 @@ class ThreeGAgent:
             logger.info("Loaded system prompt from instructions file into remote environment sources.")
 
         # 2. Build remote environment payload (reuses existing environment_id if active)
+        active_env_id = self.environment.get_environment_id()
+        if active_env_id and not force_fresh_environment:
+            reporter.environment(f"Reusing remote sandbox ({active_env_id[:18]}...)")
+        else:
+            reporter.environment("Provisioning fresh remote sandbox container...")
+
         env_payload = self.environment.build_environment_payload(
             sources=remote_sources,
             force_fresh=force_fresh_environment,
@@ -220,12 +237,46 @@ class ThreeGAgent:
         if self.last_interaction_id and not force_fresh_environment:
             interaction_kwargs["previous_interaction_id"] = self.last_interaction_id
 
+        reporter.thinking("Reasoning through instructions and planning solution...")
+
+        interaction = None
         try:
-            interaction = self.client.interactions.create(**interaction_kwargs)
+            # First attempt streaming to capture live steps (thinking, skill use, tool call)
+            try:
+                stream_kwargs = dict(interaction_kwargs)
+                stream_kwargs["stream"] = True
+                stream_result = self.client.interactions.create(**stream_kwargs)
+                if hasattr(stream_result, "__iter__") and not hasattr(stream_result, "output_text"):
+                    for raw_event in stream_result:
+                        data = getattr(raw_event, "data", raw_event)
+                        # Check step events
+                        step = getattr(data, "step", None)
+                        if step:
+                            step_name = type(step).__name__.lower()
+                            if "thought" in step_name:
+                                txt = getattr(step, "thought", "") or getattr(step, "summary", "")
+                                reporter.thinking(txt[:60] if txt else "Reasoning...")
+                            elif any(k in step_name for k in ("tool", "function", "codeexecution", "filesearch", "mcpserver")):
+                                t_name = getattr(step, "name", None) or getattr(getattr(step, "function_call", None), "name", None) or "sandbox_tool"
+                                reporter.tool_call(str(t_name))
+                            elif "processing" in step_name or "skill" in step_name:
+                                reporter.skill_use("Executing skill step")
+                            elif "modeloutput" in step_name:
+                                reporter.responding()
+
+                        if hasattr(data, "interaction"):
+                            interaction = data.interaction
+                else:
+                    interaction = stream_result
+            except Exception as stream_err:
+                logger.debug("Streaming execution fallback: %s", stream_err)
+                interaction = self.client.interactions.create(**interaction_kwargs)
+
         except Exception as api_err:
             err_msg = str(api_err)
             # If 404 occurs because a previously persisted environment ID has expired on Google's servers:
             if ("404" in err_msg or "not found" in err_msg.lower() or "not_found" in err_msg.lower()) and isinstance(env_payload, str):
+                reporter.environment("Sandbox expired. Provisioning fresh container...")
                 logger.warning(
                     "Remote container Environment ID '%s' not found (expired). "
                     "Resetting local state and provisioning a fresh remote sandbox...",
@@ -240,9 +291,13 @@ class ThreeGAgent:
                 interaction_kwargs["environment"] = fresh_env_payload
                 if "previous_interaction_id" in interaction_kwargs:
                     del interaction_kwargs["previous_interaction_id"]
+                reporter.thinking("Awaiting Antigravity response in fresh container...")
                 interaction = self.client.interactions.create(**interaction_kwargs)
             else:
+                reporter.stop("Execution failed")
                 raise
+
+        reporter.complete("Response received")
 
         # 5. Securely capture and persist the remote environment ID
         returned_env_id = getattr(interaction, "environment_id", None) or (
@@ -305,9 +360,9 @@ class ThreeGAgent:
             raw_interaction=interaction,
         )
 
-    def chat(self, message: str) -> ThreeGAgentResponse:
+    def chat(self, message: str, show_status: bool = True) -> ThreeGAgentResponse:
         """Conducts a multi-turn conversation turn while maintaining session state."""
-        return self.execute(message, force_fresh_environment=False)
+        return self.execute(message, force_fresh_environment=False, show_status=show_status)
 
     def run_skill_stage(
         self,
@@ -315,6 +370,7 @@ class ThreeGAgent:
         stage_identifier: Union[int, str],
         stage_input: str,
         save_output_as: Optional[str] = None,
+        show_status: bool = True,
     ) -> ThreeGAgentResponse:
         """Executes a specific stage from a loaded multi-stage skill (e.g. pedagogy-engineering).
         
@@ -323,6 +379,7 @@ class ThreeGAgent:
             stage_identifier: Stage number or key (e.g. 0, 1, "stage_0").
             stage_input: Input parameters for this stage.
             save_output_as: Optional filename to save the stage deliverable locally.
+            show_status: Whether to display dynamic terminal status updates.
         """
         stage_ref = (
             f"stage_{stage_identifier}"
@@ -336,7 +393,7 @@ class ThreeGAgent:
             f"Produce the full deliverable using explicit file blocks so it can be saved locally."
         )
 
-        response = self.execute(stage_prompt)
+        response = self.execute(stage_prompt, show_status=show_status)
 
         # If a specific filename was requested, also write the output text directly
         if save_output_as:
@@ -397,4 +454,58 @@ class ThreeGAgent:
     def list_local_files(self) -> List[Dict[str, Any]]:
         """Lists all files created and accessible locally."""
         return self.storage.list_saved_files()
+
+    def delete_agent(self, agent_id: Optional[str] = None) -> DeletionResult:
+        """Deletes the agent according to Antigravity SDK procedure."""
+        target = agent_id or self.config.agent_id
+        return AgentDeletionManager.delete_agent(
+            agent_id=target,
+            client=self.client,
+            registry=self.registry,
+            state_dir=self.config.state_dir,
+        )
+
+    def delete_interaction(self, interaction_id: Optional[str] = None) -> DeletionResult:
+        """Deletes an interaction according to Antigravity SDK procedure."""
+        target = interaction_id or self.last_interaction_id
+        if not target:
+            return DeletionResult(
+                success=False,
+                target_type="interaction",
+                target_id="none",
+                remote_deleted=False,
+                local_deleted=False,
+                message="No interaction ID provided or active.",
+            )
+        return AgentDeletionManager.delete_interaction(
+            interaction_id=target,
+            client=self.client,
+            registry=self.registry,
+            state_dir=self.config.state_dir,
+        )
+
+    def delete_conversation_session(self, session_id: Optional[str] = None) -> DeletionResult:
+        """Deletes a conversation session, held remote interaction, and environment."""
+        target = session_id or self.active_session_id
+        if not target:
+            return DeletionResult(
+                success=False,
+                target_type="session",
+                target_id="none",
+                remote_deleted=False,
+                local_deleted=False,
+                message="No session ID provided or active.",
+            )
+        res = AgentDeletionManager.delete_conversation_session(
+            agent_id=self.config.agent_id,
+            session_id=target,
+            client=self.client,
+            registry=self.registry,
+            state_dir=self.config.state_dir,
+        )
+        if target == self.active_session_id:
+            self.active_session_id = None
+            self.last_interaction_id = None
+        return res
+
 

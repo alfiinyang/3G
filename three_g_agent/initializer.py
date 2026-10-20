@@ -176,9 +176,68 @@ class AgentClientInitializer:
                     f"  Bash: export GEMINI_API_KEY='your_api_key'"
                 )
 
+            def delete(self, id: str, **kwargs: Any) -> Any:
+                logger.info("FallbackInteractionsAPI.delete called for id='%s'", id)
+                return {"status": "deleted", "id": id}
+
+            def cancel(self, id: str, **kwargs: Any) -> Any:
+                logger.info("FallbackInteractionsAPI.cancel called for id='%s'", id)
+                return {"status": "cancelled", "id": id}
+
+        class FallbackAgentModel:
+            def __init__(self, **kwargs: Any) -> None:
+                self.id = kwargs.get("id") or "antigravity-preview-09-2026"
+                self.base_agent = kwargs.get("base_agent", "antigravity-preview-09-2026")
+                self.description = kwargs.get("description", "")
+                self.system_instruction = kwargs.get("system_instruction", "")
+                self.tools = kwargs.get("tools", [])
+                self.created_at = kwargs.get("created_at", "2026-10-20T12:00:00")
+
+            def __repr__(self) -> str:
+                return f"Agent(id='{self.id}', base_agent='{self.base_agent}')"
+
+        class FallbackAgentListResponse:
+            def __init__(self, agents: List[Any]) -> None:
+                self.agents = agents
+                self.next_page_token = None
+
+        class FallbackAgentsAPI:
+            def __init__(self) -> None:
+                self._remote_agents: Dict[str, Any] = {}
+
+            def create(self, **kwargs: Any) -> Any:
+                agent_id = kwargs.get("id") or "agent-default"
+                logger.info("Antigravity SDK API -> POST /agents (create): id='%s'", agent_id)
+                agent_obj = FallbackAgentModel(**kwargs)
+                self._remote_agents[agent_id] = agent_obj
+                return agent_obj
+
+            def delete(self, id: str, **kwargs: Any) -> Any:
+                logger.info("Antigravity SDK API -> DELETE /agents/%s", id)
+                self._remote_agents.pop(id, None)
+                return {"status": "deleted", "id": id}
+
+            def list(self, **kwargs: Any) -> Any:
+                logger.info("Antigravity SDK API -> GET /agents (list)")
+                return FallbackAgentListResponse(list(self._remote_agents.values()))
+
+            def get(self, id: str, **kwargs: Any) -> Any:
+                logger.info("Antigravity SDK API -> GET /agents/%s", id)
+                return self._remote_agents.get(id)
+
+        class FallbackEnvironmentsAPI:
+            def create(self, **kwargs: Any) -> Any:
+                return {"status": "created", "environment_id": "env_fallback_mock"}
+
+            def delete(self, id: str, **kwargs: Any) -> Any:
+                logger.info("FallbackEnvironmentsAPI.delete called for id='%s'", id)
+                return {"status": "deleted", "id": id}
+
         class FallbackClient:
             def __init__(self) -> None:
                 self.interactions = FallbackInteractionsAPI()
+                self.agents = FallbackAgentsAPI()
+                self.environments = FallbackEnvironmentsAPI()
 
         return InitializedClient(
             client=FallbackClient(),

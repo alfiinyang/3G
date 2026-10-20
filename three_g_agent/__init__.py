@@ -11,10 +11,12 @@ Provides an autonomous agent using the Antigravity SDK with:
 from .agent import ThreeGAgent, ThreeGAgentResponse
 from .config import ClientParameterCollector, ThreeGAgentConfig, resolve_default_agent_id
 from .creator import AgentCreationResult, AgentCreationSpec, AgentCreator
+from .deletion import AgentDeletionManager, DeletionResult
 from .environment import EnvironmentState, EnvironmentStore
 from .initializer import AgentClientInitializer, InitializedClient, ModelInitializer
-from .registry import AgentRecord, AgentRegistry, ConversationSession, validate_agent_id
+from .registry import AgentRegistry, ConversationSession, SessionRegistry, validate_agent_id
 from .skills import Skill, SkillFile, SkillLoader
+from .status import TurnStatusReporter
 from .storage import FileStorageManager, SavedFile
 
 __all__ = [
@@ -29,9 +31,12 @@ __all__ = [
     "AgentCreationSpec",
     "AgentCreationResult",
     "AgentRegistry",
-    "AgentRecord",
+    "SessionRegistry",
     "ConversationSession",
     "validate_agent_id",
+    "AgentDeletionManager",
+    "DeletionResult",
+    "TurnStatusReporter",
     "EnvironmentStore",
     "EnvironmentState",
     "SkillLoader",

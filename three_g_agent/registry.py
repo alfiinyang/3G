@@ -1,7 +1,10 @@
-"""Agent Registry and Session Persistence Store for 3G-agent.
+"""Session Persistence and Environment Store for 3G-agent.
 
-Maintains metadata of all created and existing Antigravity agents, along with
-their associated remote environment IDs and conversation sessions.
+STRICT REMOTE AGENT ARCHITECTURE:
+- Agents are created and listed exclusively via the Antigravity SDK API (`client.agents`).
+- No agent definitions or agent catalogs are stored in local memory or local JSON files.
+- This module strictly persists multi-turn conversation sessions and holds their associated
+  remote environment IDs across turns.
 """
 
 from __future__ import annotations
@@ -50,7 +53,7 @@ def validate_agent_id(raw_id: str) -> str:
 
 @dataclass
 class ConversationSession:
-    """Represents a conversation session tied to an agent and remote environment."""
+    """Represents a conversation session holding a remote sandbox environment ID."""
     session_id: str
     agent_id: str
     environment_id: str
@@ -68,119 +71,110 @@ class ConversationSession:
         return cls(**data)
 
 
-@dataclass
-class AgentRecord:
-    """Metadata record for a registered agent."""
-    agent_id: str
-    created_at: str
-    base_agent: str = "antigravity-preview-09-2026"
-    description: str = ""
-    skills_names: List[str] = field(default_factory=list)
-    has_instructions: bool = False
-    instructions_preview: str = ""
-    conversations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> AgentRecord:
-        return cls(**data)
-
-
-class AgentRegistry:
-    """Local persistent store for agents, their skills, and their remote environments."""
+class SessionRegistry:
+    """Persistent store strictly for conversation sessions and held remote environment IDs.
+    
+    Agents themselves are NOT stored locally; agent listing and creation query
+    the Antigravity SDK API directly.
+    """
 
     def __init__(self, state_dir: Union[str, Path] = "./.3g_agent") -> None:
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.registry_file = self.state_dir / "agents_registry.json"
-        self._ensure_registry()
+        self.sessions_file = self.state_dir / "sessions_registry.json"
+        self._ensure_sessions_file()
 
-    def _ensure_registry(self) -> None:
-        """Initializes empty registry file if missing."""
-        if not self.registry_file.exists():
+    def _ensure_sessions_file(self) -> None:
+        """Initializes empty sessions file if missing."""
+        if not self.sessions_file.exists():
             default_data = {
-                "version": "1.0",
-                "agents": {},
-                "last_active_agent_id": None,
+                "version": "2.0",
+                "sessions": {},
+                "last_active_session_id": None,
             }
             self._save_raw(default_data)
 
     def _load_raw(self) -> Dict[str, Any]:
         try:
-            return json.loads(self.registry_file.read_text(encoding="utf-8"))
+            return json.loads(self.sessions_file.read_text(encoding="utf-8"))
         except Exception as e:
-            logger.warning("Error reading registry file: %s. Reinitializing.", e)
-            return {"version": "1.0", "agents": {}, "last_active_agent_id": None}
+            logger.warning("Error reading sessions registry file: %s. Reinitializing.", e)
+            return {"version": "2.0", "sessions": {}, "last_active_session_id": None}
 
     def _save_raw(self, data: Dict[str, Any]) -> None:
-        self.registry_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        self.sessions_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def register_agent(
-        self,
-        agent_id: str,
-        base_agent: str = "antigravity-preview-09-2026",
-        description: str = "",
-        skills_names: Optional[List[str]] = None,
-        has_instructions: bool = False,
-        instructions_preview: str = "",
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> AgentRecord:
-        """Registers a newly created or discovered agent."""
-        clean_id = validate_agent_id(agent_id)
-        raw_data = self._load_raw()
+    # -------------------------------------------------------------------------
+    # AGENT OPERATIONS: QUERIED FROM ANTIGRAVITY SDK API (ZERO LOCAL MEMORY)
+    # -------------------------------------------------------------------------
 
-        existing = raw_data.get("agents", {}).get(clean_id)
-        conversations = existing.get("conversations", {}) if existing else {}
+    def list_agents(self, client: Optional[Any] = None) -> List[Any]:
+        """Lists agents directly from the Antigravity SDK API (`client.agents.list`).
+        
+        Zero local memory is used.
+        """
+        if not client:
+            logger.debug("list_agents called without client; returning empty list.")
+            return []
 
-        record = AgentRecord(
-            agent_id=clean_id,
-            created_at=existing.get("created_at") if existing else datetime.now().isoformat(),
-            base_agent=base_agent,
-            description=description,
-            skills_names=skills_names or [],
-            has_instructions=has_instructions,
-            instructions_preview=instructions_preview[:120],
-            conversations=conversations,
-            metadata=metadata or {},
-        )
-
-        raw_data.setdefault("agents", {})[clean_id] = record.to_dict()
-        raw_data["last_active_agent_id"] = clean_id
-        self._save_raw(raw_data)
-        logger.info("Registered agent '%s' in local registry.", clean_id)
-        return record
-
-    def list_agents(self) -> List[AgentRecord]:
-        """Lists all registered agents."""
-        raw_data = self._load_raw()
-        agents = []
-        for agent_data in raw_data.get("agents", {}).values():
+        sdk_client = getattr(client, "client", client)
+        if hasattr(sdk_client, "agents") and hasattr(sdk_client.agents, "list"):
             try:
-                agents.append(AgentRecord.from_dict(agent_data))
+                res = sdk_client.agents.list()
+                if hasattr(res, "agents"):
+                    return list(res.agents)
+                if isinstance(res, list):
+                    return res
             except Exception as e:
-                logger.warning("Failed to deserialize agent record: %s", e)
-        return agents
+                logger.error("SDK API client.agents.list error: %s", e)
+        return []
 
-    def get_agent(self, agent_id: str) -> Optional[AgentRecord]:
-        """Retrieves an agent by ID."""
-        try:
-            clean_id = validate_agent_id(agent_id)
-        except ValueError:
-            clean_id = agent_id.strip()
+    def get_agent(self, agent_id: str, client: Optional[Any] = None) -> Optional[Any]:
+        """Retrieves an agent directly from the Antigravity SDK API (`client.agents.get`)."""
+        if not client:
+            return None
 
-        raw_data = self._load_raw()
-        data = raw_data.get("agents", {}).get(clean_id)
-        if data:
-            return AgentRecord.from_dict(data)
+        sdk_client = getattr(client, "client", client)
+        if hasattr(sdk_client, "agents") and hasattr(sdk_client.agents, "get"):
+            try:
+                clean_id = validate_agent_id(agent_id)
+                return sdk_client.agents.get(id=clean_id)
+            except Exception as e:
+                logger.debug("SDK API client.agents.get error: %s", e)
         return None
 
-    def get_last_active_agent_id(self) -> Optional[str]:
-        """Returns the ID of the last active agent, if any."""
-        raw_data = self._load_raw()
-        return raw_data.get("last_active_agent_id")
+    def register_agent(self, agent_id: str, **kwargs: Any) -> Any:
+        """Deprecated: Agent definitions are created directly on the Antigravity SDK API."""
+        clean_id = validate_agent_id(agent_id)
+        logger.info("register_agent note: Agent '%s' is managed via Antigravity SDK API, not stored locally.", clean_id)
+        return clean_id
+
+    def delete_agent(self, agent_id: str, client: Optional[Any] = None) -> bool:
+        """Deletes an agent via Antigravity SDK API and cleans up associated session records."""
+        clean_id = validate_agent_id(agent_id)
+        remote_deleted = False
+
+        if client:
+            sdk_client = getattr(client, "client", client)
+            if hasattr(sdk_client, "agents") and hasattr(sdk_client.agents, "delete"):
+                try:
+                    sdk_client.agents.delete(id=clean_id)
+                    remote_deleted = True
+                except Exception as e:
+                    logger.warning("Remote SDK delete agent error: %s", e)
+
+        # Clear any local session records for this agent
+        raw = self._load_raw()
+        sessions = raw.get("sessions", {})
+        to_del = [sid for sid, sdata in sessions.items() if sdata.get("agent_id") == clean_id]
+        for sid in to_del:
+            del sessions[sid]
+        self._save_raw(raw)
+        return remote_deleted or bool(to_del)
+
+    # -------------------------------------------------------------------------
+    # CONVERSATION SESSION PERSISTENCE (Holding remote environment_id across turns)
+    # -------------------------------------------------------------------------
 
     def create_conversation_session(
         self,
@@ -188,15 +182,9 @@ class AgentRegistry:
         environment_id: str,
         title: str = "New Chat",
     ) -> ConversationSession:
-        """Creates and persists a new conversation session for an agent."""
+        """Creates and persists a new conversation session for an agent, holding the remote environment ID."""
         clean_id = validate_agent_id(agent_id)
         raw_data = self._load_raw()
-        agent_data = raw_data.get("agents", {}).get(clean_id)
-        if not agent_data:
-            # Register placeholder agent record if not present
-            self.register_agent(clean_id)
-            raw_data = self._load_raw()
-            agent_data = raw_data["agents"][clean_id]
 
         now_str = datetime.now().isoformat()
         session_id = f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -211,9 +199,15 @@ class AgentRegistry:
             title=title,
         )
 
-        agent_data.setdefault("conversations", {})[session_id] = session.to_dict()
+        raw_data.setdefault("sessions", {})[session_id] = session.to_dict()
+        raw_data["last_active_session_id"] = session_id
         self._save_raw(raw_data)
-        logger.info("Created conversation session '%s' (env: %s) for agent '%s'", session_id, environment_id, clean_id)
+        logger.info(
+            "Created conversation session '%s' (holding env: %s) for agent '%s'",
+            session_id,
+            environment_id,
+            clean_id,
+        )
         return session
 
     def update_conversation_session(
@@ -232,11 +226,7 @@ class AgentRegistry:
             clean_id = agent_id
 
         raw_data = self._load_raw()
-        agent_data = raw_data.get("agents", {}).get(clean_id)
-        if not agent_data:
-            return None
-
-        conv_dict = agent_data.get("conversations", {}).get(session_id)
+        conv_dict = raw_data.get("sessions", {}).get(session_id)
         if not conv_dict:
             return None
 
@@ -251,21 +241,69 @@ class AgentRegistry:
             session.title = title
         session.updated_at = datetime.now().isoformat()
 
-        agent_data["conversations"][session_id] = session.to_dict()
+        raw_data["sessions"][session_id] = session.to_dict()
         self._save_raw(raw_data)
         return session
 
+    def get_conversation_session(self, agent_id: str, session_id: str) -> Optional[ConversationSession]:
+        """Retrieves a specific conversation session."""
+        raw_data = self._load_raw()
+        conv_dict = raw_data.get("sessions", {}).get(session_id)
+        if conv_dict:
+            return ConversationSession.from_dict(conv_dict)
+        return None
+
+    def delete_conversation_session(self, agent_id: str, session_id: str) -> bool:
+        """Deletes a conversation session from the local store."""
+        raw_data = self._load_raw()
+        sessions = raw_data.get("sessions", {})
+        if session_id in sessions:
+            del sessions[session_id]
+            if raw_data.get("last_active_session_id") == session_id:
+                raw_data["last_active_session_id"] = next(iter(sessions.keys())) if sessions else None
+            self._save_raw(raw_data)
+            logger.info("Deleted conversation session '%s'.", session_id)
+            return True
+        return False
+
     def list_conversations(self, agent_id: str) -> List[ConversationSession]:
         """Lists all conversation sessions for a given agent."""
-        agent = self.get_agent(agent_id)
-        if not agent:
-            return []
+        try:
+            clean_id = validate_agent_id(agent_id)
+        except ValueError:
+            clean_id = agent_id
+
+        raw_data = self._load_raw()
         sessions = []
-        for s_data in agent.conversations.values():
+        for s_data in raw_data.get("sessions", {}).values():
+            if s_data.get("agent_id") == clean_id:
+                try:
+                    sessions.append(ConversationSession.from_dict(s_data))
+                except Exception:
+                    pass
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return sessions
+
+    def list_all_sessions(self) -> List[ConversationSession]:
+        """Lists all conversation sessions across all agents."""
+        raw_data = self._load_raw()
+        sessions = []
+        for s_data in raw_data.get("sessions", {}).values():
             try:
                 sessions.append(ConversationSession.from_dict(s_data))
             except Exception:
                 pass
-        # Sort by updated_at descending
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions
+
+    def find_session_by_interaction_id(self, interaction_id: str) -> Optional[tuple[str, ConversationSession]]:
+        """Finds (agent_id, session) across all sessions by interaction_id."""
+        raw_data = self._load_raw()
+        for s_data in raw_data.get("sessions", {}).values():
+            if s_data.get("last_interaction_id") == interaction_id:
+                return s_data.get("agent_id"), ConversationSession.from_dict(s_data)
+        return None
+
+
+# Backward-compatible alias
+AgentRegistry = SessionRegistry
