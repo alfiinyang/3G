@@ -19,6 +19,7 @@ from three_g_agent import (
     ThreeGAgent,
     ThreeGAgentConfig,
     ClientParameterCollector,
+    AgentClientInitializer,
     ModelInitializer,
     EnvironmentStore,
     SkillLoader,
@@ -47,6 +48,26 @@ class TestThreeGAgent(unittest.TestCase):
         self.assertEqual(len(errors), 0)
         self.assertEqual(config.environment_type, "remote")
         self.assertEqual(config.agent_name, "3G-agent")
+
+    def test_agent_id_resolution(self):
+        """Test that agent_id defaults to Antigravity coding agent and rejects boolean flags."""
+        from three_g_agent.config import resolve_default_agent_id
+
+        # Default resolution
+        self.assertEqual(resolve_default_agent_id(), "antigravity-preview-09-2026")
+
+        # Config properly sets agent_id
+        config = ThreeGAgentConfig(skills_dir=Path("./skills"))
+        self.assertEqual(config.agent_id, "antigravity-preview-09-2026")
+        self.assertEqual(config.model_name, "antigravity-preview-09-2026")
+
+        # Rejection of boolean flag '1' when passed as model_name or agent_id
+        config_with_flag = ThreeGAgentConfig(skills_dir=Path("./skills"), model_name="1")
+        self.assertEqual(config_with_flag.agent_id, "antigravity-preview-09-2026")
+
+        # Acceptance of explicit custom agent ID
+        custom_config = ThreeGAgentConfig(skills_dir=Path("./skills"), agent_id="custom-coding-agent")
+        self.assertEqual(custom_config.agent_id, "custom-coding-agent")
 
         # Test failure if environment is not remote
         invalid_config = ThreeGAgentConfig(
@@ -238,6 +259,107 @@ End of document.
         response2 = agent.chat("Proceed to Stage 1.")
         self.assertEqual(response2.environment_id, "env_mock_sandbox_777")
 
+    def test_validate_agent_id_format(self):
+        """Test agent_id format validation for [name-id_num] e.g. [coder-12345]."""
+        from three_g_agent.registry import validate_agent_id
+
+        # Valid formats
+        self.assertEqual(validate_agent_id("coder-12345"), "coder-12345")
+        self.assertEqual(validate_agent_id("[coder-12345]"), "coder-12345")
+        self.assertEqual(validate_agent_id("pedagogy-001"), "pedagogy-001")
+        self.assertEqual(validate_agent_id("3g_agent-99"), "3g_agent-99")
+
+        # Invalid formats
+        invalid_ids = ["coder", "12345", "", "   ", "coder_12345", "coder/12345", "-12345"]
+        for bad_id in invalid_ids:
+            with self.assertRaises(ValueError, msg=f"Should reject '{bad_id}'"):
+                validate_agent_id(bad_id)
+
+    def test_standalone_agent_creator(self):
+        """Test standalone AgentCreator module with skill and instructions pre-loading."""
+        from three_g_agent.creator import AgentCreationSpec, AgentCreator
+        from three_g_agent.registry import AgentRegistry
+
+        registry = AgentRegistry(state_dir=self.state_dir)
+        test_instr = self.temp_dir / "instructions.md"
+        test_instr.write_text("Elite script creation agent prompt.", encoding="utf-8")
+
+        spec = AgentCreationSpec(
+            agent_id="coder-99999",
+            skills_dir=Path("./skills"),
+            instructions_file=test_instr,
+            description="Testing standalone creator",
+        )
+        result = AgentCreator.create_agent(spec=spec, registry=registry)
+
+        self.assertEqual(result.agent_id, "coder-99999")
+        self.assertGreater(result.skills_count, 0)
+        self.assertTrue(result.has_instructions)
+        self.assertGreater(result.instructions_length, 0)
+
+        # Verify it was persisted in the registry
+        saved_record = registry.get_agent("coder-99999")
+        self.assertIsNotNone(saved_record)
+        self.assertEqual(saved_record.agent_id, "coder-99999")
+        self.assertTrue(saved_record.has_instructions)
+
+    def test_agent_registry_and_conversation_persistence(self):
+        """Test reusing existing agent and holding environment_id across conversations."""
+        from three_g_agent.registry import AgentRegistry
+
+        registry = AgentRegistry(state_dir=self.state_dir)
+        registry.register_agent("coder-11111", description="Persistent conversation test agent")
+
+        # 1. Create a conversation session with environment ID
+        session = registry.create_conversation_session(
+            agent_id="coder-11111",
+            environment_id="env_remote_sandbox_turn1",
+            title="Script Automation Chat",
+        )
+        self.assertEqual(session.agent_id, "coder-11111")
+        self.assertEqual(session.environment_id, "env_remote_sandbox_turn1")
+        self.assertEqual(session.turn_count, 0)
+
+        # 2. Update conversation session (turn 2)
+        updated = registry.update_conversation_session(
+            agent_id="coder-11111",
+            session_id=session.session_id,
+            environment_id="env_remote_sandbox_turn1",
+            last_interaction_id="int_turn2_abc",
+            increment_turn=True,
+        )
+        self.assertEqual(updated.turn_count, 1)
+        self.assertEqual(updated.last_interaction_id, "int_turn2_abc")
+
+        # 3. List conversations for agent
+        conv_list = registry.list_conversations("coder-11111")
+        self.assertEqual(len(conv_list), 1)
+        self.assertEqual(conv_list[0].environment_id, "env_remote_sandbox_turn1")
+
+        # 4. Verify ThreeGAgent resume_conversation holds this environment_id
+        config = ThreeGAgentConfig(
+            agent_name="3G-agent",
+            agent_id="coder-11111",
+            skills_dir=Path("./skills"),
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+        agent = ThreeGAgent.create(
+            skills_dir=Path("./skills"),
+            agent_id="coder-11111",
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+        resumed = agent.resume_conversation(session.session_id)
+        self.assertTrue(resumed)
+        self.assertEqual(agent.get_environment_id(), "env_remote_sandbox_turn1")
+
+        # 5. Verify starting a new chat resets the active session
+        agent.start_new_chat()
+        self.assertIsNone(agent.active_session_id)
+        self.assertIsNone(agent.get_environment_id())
+
 
 if __name__ == "__main__":
     unittest.main()
+

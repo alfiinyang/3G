@@ -12,13 +12,37 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def resolve_default_agent_id() -> str:
+    """Resolves the default Antigravity coding agent ID, ignoring boolean environment flags."""
+    env_agent = os.getenv("ANTIGRAVITY_AGENT_ID") or os.getenv("ANTIGRAVITY_MODEL")
+    if not env_agent:
+        raw_agent = os.getenv("ANTIGRAVITY_AGENT")
+        if raw_agent and raw_agent.lower() not in ("1", "0", "true", "false", "yes", "no"):
+            env_agent = raw_agent
+
+    return env_agent or "antigravity-preview-09-2026"
+
+
+def resolve_default_instructions_file() -> Path:
+    """Finds instructions file, checking instructions.txt first, then instructions.md."""
+    env_file = os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE")
+    if env_file:
+        p = Path(env_file)
+        if p.exists():
+            return p
+    for candidate in (Path("./instructions.txt"), Path("./instructions.md")):
+        if candidate.is_file():
+            return candidate
+    return Path("./instructions.txt")
+
+
 @dataclass
 class ThreeGAgentConfig:
     """Strongly-typed configuration schema for 3G-agent.
     
     Attributes:
         agent_name: Name identifier of the agent (default: "3G-agent").
-        model_name: Underlying Gemini/Antigravity model or agent ID.
+        agent_id: Antigravity coding agent ID (default: "antigravity-preview-09-2026").
         environment_type: Sandbox environment type ("remote" by default).
         api_key: Gemini/Google Cloud API Key (optional if using ADC or env vars).
         skills_dir: Path to directory containing a skill or group of skills.
@@ -29,24 +53,26 @@ class ThreeGAgentConfig:
         location: Google Cloud region (e.g., "us-central1").
         max_total_tokens: Optional token limit for agent reasoning and execution.
         system_instruction_override: Optional custom system instructions.
-        instructions_file: Path to instructions.md holding system prompt.
+        instructions_file: Path to instructions.txt / instructions.md holding system prompt.
         extra_sources: Additional files or sources to mount in the remote environment.
+        model_name: Optional backwards-compatible alias for agent_id.
     """
 
     agent_name: str = "3G-agent"
-    model_name: str = "antigravity-preview-09-2026"
+    agent_id: str = field(default_factory=resolve_default_agent_id)
     environment_type: str = "remote"
     api_key: Optional[str] = None
     skills_dir: Path = field(default_factory=lambda: Path("./skills"))
     state_dir: Path = field(default_factory=lambda: Path("./.3g_agent"))
     output_dir: Path = field(default_factory=lambda: Path("./outputs/3g_agent"))
-    instructions_file: Optional[Path] = field(default_factory=lambda: Path("./instructions.md"))
+    instructions_file: Optional[Path] = field(default_factory=resolve_default_instructions_file)
     vertex_ai: bool = False
     project: Optional[str] = None
     location: Optional[str] = None
     max_total_tokens: Optional[int] = None
     system_instruction_override: Optional[str] = None
     extra_sources: List[Dict[str, Any]] = field(default_factory=list)
+    model_name: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Convert string paths to Path objects and normalize defaults."""
@@ -59,19 +85,14 @@ class ThreeGAgentConfig:
         if isinstance(self.instructions_file, str):
             self.instructions_file = Path(self.instructions_file)
 
-    def load_instructions(self) -> Optional[str]:
-        """Loads system instructions from override or instructions.md file."""
-        if self.system_instruction_override and self.system_instruction_override.strip():
-            return self.system_instruction_override.strip()
-
-        if self.instructions_file and self.instructions_file.is_file():
-            try:
-                content = self.instructions_file.read_text(encoding="utf-8").strip()
-                if content:
-                    return content
-            except Exception:
-                pass
-        return None
+        # Harmonize agent_id and model_name alias
+        if self.model_name and self.model_name.strip():
+            clean_model = self.model_name.strip()
+            if clean_model.lower() not in ("1", "0", "true", "false", "yes", "no"):
+                self.agent_id = clean_model
+        if not self.agent_id or self.agent_id.strip() in ("1", "0", "true", "false", "yes", "no"):
+            self.agent_id = resolve_default_agent_id()
+        self.model_name = self.agent_id
 
         # Resolve API Key from environment if not explicitly passed
         if not self.api_key:
@@ -88,13 +109,28 @@ class ThreeGAgentConfig:
         if not self.location:
             self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
+    def load_instructions(self) -> Optional[str]:
+        """Loads system instructions from override or instructions file (txt/md)."""
+        if self.system_instruction_override and self.system_instruction_override.strip():
+            return self.system_instruction_override.strip()
+
+        target_file = self.instructions_file if self.instructions_file is not None else resolve_default_instructions_file()
+        if target_file and target_file.is_file():
+            try:
+                content = target_file.read_text(encoding="utf-8").strip()
+                if content:
+                    return content
+            except Exception:
+                pass
+        return None
+
 
 class ClientParameterCollector:
     """Collects, validates, and builds configuration parameters for 3G-agent.
     
     This component is solely responsible for collecting client parameters from
     various inputs (CLI args, environment variables, settings files, dicts)
-    and ensuring validation before any model initialization or runtime execution occurs.
+    and ensuring validation before any agent client initialization or runtime execution occurs.
     """
 
     @classmethod
@@ -104,7 +140,7 @@ class ClientParameterCollector:
         
         return ThreeGAgentConfig(
             agent_name=os.getenv("ANTIGRAVITY_AGENT_NAME", "3G-agent"),
-            model_name=os.getenv("ANTIGRAVITY_MODEL", "antigravity-preview-09-2026"),
+            agent_id=resolve_default_agent_id(),
             environment_type="remote",  # Mandatory requirement: set environment to remote
             api_key=(
                 os.getenv("GEMINI_API_KEY")
@@ -124,6 +160,11 @@ class ClientParameterCollector:
     def from_dict(cls, data: Dict[str, Any]) -> ThreeGAgentConfig:
         """Constructs and validates configuration from a dictionary."""
         config_data = dict(data)
+        # Handle backwards-compatible model_name key
+        if "model_name" in config_data and "agent_id" not in config_data:
+            val = config_data.pop("model_name")
+            if val and str(val).lower() not in ("1", "0", "true", "false"):
+                config_data["agent_id"] = val
         # Ensure environment_type defaults to remote if not explicitly provided
         config_data.setdefault("environment_type", "remote")
         config_data.setdefault("agent_name", "3G-agent")
