@@ -587,7 +587,6 @@ def main() -> int:
 
     if args.stage:
         stage_input = prompt_str or "Proceed with stage execution using provided context."
-        print(f"\n[>] Executing Skill Stage: {args.skill_name} / {args.stage}...")
         try:
             response = agent.run_skill_stage(
                 skill_name=args.skill_name,
@@ -596,32 +595,19 @@ def main() -> int:
                 save_output_as=f"{args.skill_name}_{args.stage}_output.md",
                 show_status=show_status,
             )
-            print("\n--- Output ---")
             print(response.output_text)
-            print(f"\nEnvironment ID: {response.environment_id}")
-            if response.saved_files:
-                print(f"\n[+] Created Artifact(s) Saved Locally ({len(response.saved_files)}):")
-                for sf in response.saved_files:
-                    print(f"  📁 {sf.file_name} ({sf.size_bytes} bytes) -> {sf.file_uri}")
             return 0
         except Exception as err:
-            print(f"\n[!] Execution Failed: {err}", file=sys.stderr)
+            print(f"Execution Failed: {err}", file=sys.stderr)
             return 1
 
     if prompt_str:
-        print(f"\n[>] Executing Prompt for agent '{chosen_agent_id}': {prompt_str}...")
         try:
             response = agent.execute(prompt_str, show_status=show_status)
-            print("\n--- Output ---")
             print(response.output_text)
-            print(f"\nEnvironment ID: {response.environment_id}")
-            if response.saved_files:
-                print(f"\n[+] Created Artifact(s) Saved Locally ({len(response.saved_files)}):")
-                for sf in response.saved_files:
-                    print(f"  📁 {sf.file_name} ({sf.size_bytes} bytes) -> {sf.file_uri}")
             return 0
         except Exception as err:
-            print(f"\n[!] Execution Failed: {err}", file=sys.stderr)
+            print(f"Execution Failed: {err}", file=sys.stderr)
             return 1
 
     # Interactive chat loop
@@ -629,10 +615,7 @@ def main() -> int:
     print("\n" + "=" * 65)
     print(f"  Session Active: Agent '{chosen_agent_id}'")
     print(f"  Session ID    : {agent.active_session_id or 'New Unsaved Session'}")
-    print(f"  Environment ID: {active_env_id}")
-    print(f"  Local Storage : {output_dir}")
-    print("  Type 'exit' to quit, '/reset' to clear container, '/delete' to delete session.")
-    print("  (Type your instructions directly without needing quotation marks)")
+    print("  Type 'exit' to quit, '/info' for status, '/reset' to clear container.")
     print("=" * 65)
 
     while True:
@@ -647,6 +630,11 @@ def main() -> int:
             if user_msg.lower() in ("exit", "quit", "q"):
                 print("Session ended.")
                 break
+            if user_msg.lower() in ("/info", "/status"):
+                print(f"  Agent ID       : {chosen_agent_id}")
+                print(f"  Session ID     : {agent.active_session_id or 'None'}")
+                print(f"  Environment ID : {agent.get_environment_id() or 'None'}")
+                continue
             if user_msg.lower() == "/reset":
                 agent.reset_environment()
                 print("[+] Environment reset. Next turn will spawn a fresh remote container.")
@@ -663,12 +651,7 @@ def main() -> int:
                 continue
 
             response = agent.chat(user_msg, show_status=show_status)
-            print("\n" + response.output_text)
-            print(f"\n[Held Environment ID: {response.environment_id} | Session: {response.session_id}]")
-            if response.saved_files:
-                print(f"\n[+] Created Artifact(s) Saved Locally ({len(response.saved_files)}):")
-                for f in response.saved_files:
-                    print(f"  📁 {f.file_name} ({f.size_bytes} bytes) -> {f.file_uri}")
+            print(response.output_text)
         except KeyboardInterrupt:
             print("\nInterrupted. Exiting...")
             break

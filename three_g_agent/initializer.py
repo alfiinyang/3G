@@ -144,7 +144,7 @@ class AgentClientInitializer:
                     masked_api_key=masked_key,
                 )
             except ValueError as val_err:
-                logger.warning(
+                logger.debug(
                     "No API key provided (%s). Using local testing client adapter. "
                     "Set GEMINI_API_KEY environment variable to execute live remote queries.",
                     val_err,
@@ -152,7 +152,7 @@ class AgentClientInitializer:
                 return cls._create_fallback_client(config, warning=str(val_err), masked_key=masked_key)
 
         except ImportError:
-            logger.warning(
+            logger.debug(
                 "google-genai package is not installed in the current environment. "
                 "Creating simulated client adapter for local testing."
             )

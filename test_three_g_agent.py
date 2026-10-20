@@ -30,6 +30,7 @@ from three_g_agent import (
     AgentCreator,
     TurnStatusReporter,
     validate_agent_id,
+    extract_interaction_text,
 )
 
 
@@ -492,6 +493,64 @@ End of document.
         self.assertTrue(del_agent_res.success)
         self.assertTrue(del_agent_res.remote_deleted)
         self.assertIsNone(AgentCreator.get_agent(agent_id, client_handle=agent.client))
+
+    def test_extract_interaction_text_only_clean_response(self):
+        """Test that extract_interaction_text extracts only the clean text and never dumps raw API objects."""
+        # 1. Official Google GenAI ModelOutputStep inside InteractionSseEventInteraction
+        try:
+            from google.genai._gaos.types.interactions.modeloutputstep import ModelOutputStep
+            from google.genai._gaos.types.interactions.textcontent import TextContent
+            from google.genai._gaos.types.interactions.interactionsseeventinteraction import InteractionSseEventInteraction
+
+            step = ModelOutputStep(
+                type="model_output",
+                content=[TextContent(type="text", text="Clean pedagogical automation logic response.")],
+            )
+            inter = InteractionSseEventInteraction(
+                id="int_live_001",
+                status="completed",
+                agent="coder-12345",
+                steps=[step],
+            )
+            extracted = extract_interaction_text(inter)
+            self.assertEqual(extracted, "Clean pedagogical automation logic response.")
+            # Ensure no raw repr / API schema leaked
+            self.assertNotIn("InteractionSseEventInteraction", extracted)
+            self.assertNotIn("int_live_001", extracted)
+        except ImportError:
+            pass
+
+        # 2. Dictionary with steps
+        dict_inter = {
+            "id": "int_dict_002",
+            "steps": [
+                {"type": "thought", "thought": "Internal reasoning hidden from user"},
+                {"type": "model_output", "content": [{"type": "text", "text": "Direct dictionary text."}]},
+            ],
+        }
+        extracted_dict = extract_interaction_text(dict_inter)
+        self.assertEqual(extracted_dict, "Direct dictionary text.")
+        self.assertNotIn("Internal reasoning", extracted_dict)
+
+        # 3. Direct output_text object
+        class MockOutputTextObj:
+            output_text = "Plain text answer"
+        self.assertEqual(extract_interaction_text(MockOutputTextObj()), "Plain text answer")
+
+        # 4. Fallback streamed chunks
+        self.assertEqual(
+            extract_interaction_text(None, fallback_streamed="Streamed response chunk"),
+            "Streamed response chunk",
+        )
+
+        # 5. Empty or unknown object must NOT dump str(obj)
+        class UnknownEmptyAPIObject:
+            def __str__(self):
+                return "UnknownEmptyAPIObject(raw_api_dump=True, debug='leaked')"
+
+        extracted_empty = extract_interaction_text(UnknownEmptyAPIObject())
+        self.assertEqual(extracted_empty, "")
+        self.assertNotIn("raw_api_dump", extracted_empty)
 
 
 if __name__ == "__main__":

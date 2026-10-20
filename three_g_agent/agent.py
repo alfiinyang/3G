@@ -52,6 +52,92 @@ class ThreeGAgentResponse:
         return [f"[{f.file_name}]({f.file_uri})" for f in self.saved_files]
 
 
+def extract_interaction_text(interaction: Any, fallback_streamed: Optional[str] = None) -> str:
+    """Extracts strictly the human-readable text response from an Antigravity Interaction object.
+    
+    Prevents leaking raw API structures, JSON payloads, or Python object representations
+    (e.g., `Interaction(...)` or `InteractionSseEventInteraction(...)`).
+    """
+    if interaction is None:
+        return (fallback_streamed or "").strip()
+
+    if isinstance(interaction, str):
+        return interaction.strip()
+
+    # 1. Direct output_text attribute or dict key
+    direct_out = getattr(interaction, "output_text", None)
+    if direct_out is None and isinstance(interaction, dict):
+        direct_out = interaction.get("output_text")
+    if isinstance(direct_out, str) and direct_out.strip():
+        return direct_out.strip()
+
+    # 2. Extract from steps (Google GenAI Interaction / InteractionSseEventInteraction)
+    steps = getattr(interaction, "steps", None)
+    if steps is None and isinstance(interaction, dict):
+        steps = interaction.get("steps")
+
+    if steps and isinstance(steps, (list, tuple)):
+        text_parts: List[str] = []
+        for step in steps:
+            step_type = getattr(step, "type", None)
+            if step_type is None and isinstance(step, dict):
+                step_type = step.get("type")
+
+            # Only model_output contains the agent's textual response to the user
+            if str(step_type) in ("model_output", "output", "model"):
+                content = getattr(step, "content", None)
+                if content is None and isinstance(step, dict):
+                    content = step.get("content")
+
+                if isinstance(content, list):
+                    for item in content:
+                        item_text = getattr(item, "text", None)
+                        if item_text is None and isinstance(item, dict):
+                            item_text = item.get("text")
+                        if isinstance(item_text, str) and item_text:
+                            text_parts.append(item_text)
+                elif isinstance(content, str) and content.strip():
+                    text_parts.append(content)
+                elif hasattr(step, "text") and isinstance(step.text, str) and step.text.strip():
+                    text_parts.append(step.text)
+
+        if text_parts:
+            return "".join(text_parts).strip()
+
+    # 3. Direct text property or output property if string
+    for attr in ("text", "output", "content", "response"):
+        val = getattr(interaction, attr, None)
+        if val is None and isinstance(interaction, dict):
+            val = interaction.get(attr)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    # 4. Standard Gemini GenerateContent response (candidates -> content -> parts -> text)
+    candidates = getattr(interaction, "candidates", None)
+    if candidates is None and isinstance(interaction, dict):
+        candidates = interaction.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first_cand = candidates[0]
+        content = getattr(first_cand, "content", None) or (first_cand.get("content") if isinstance(first_cand, dict) else None)
+        if content:
+            parts = getattr(content, "parts", None) or (content.get("parts") if isinstance(content, dict) else None)
+            if isinstance(parts, list):
+                cand_texts = []
+                for p in parts:
+                    t = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
+                    if isinstance(t, str):
+                        cand_texts.append(t)
+                if cand_texts:
+                    return "".join(cand_texts).strip()
+
+    # 5. Check fallback streamed chunks accumulated during event streaming
+    if fallback_streamed and fallback_streamed.strip():
+        return fallback_streamed.strip()
+
+    # 6. Fallback: Return empty string instead of dumping the raw API object repr
+    return ""
+
+
 class ThreeGAgent:
     """The reusable 3G-agent.
     
@@ -240,6 +326,7 @@ class ThreeGAgent:
         reporter.thinking("Reasoning through instructions and planning solution...")
 
         interaction = None
+        streamed_chunks: List[str] = []
         try:
             # First attempt streaming to capture live steps (thinking, skill use, tool call)
             try:
@@ -264,6 +351,13 @@ class ThreeGAgent:
                             elif "modeloutput" in step_name:
                                 reporter.responding()
 
+                        # Collect text delta if streaming
+                        delta = getattr(data, "delta", None)
+                        if delta:
+                            d_text = getattr(delta, "text", None)
+                            if isinstance(d_text, str) and d_text:
+                                streamed_chunks.append(d_text)
+
                         if hasattr(data, "interaction"):
                             interaction = data.interaction
                 else:
@@ -277,12 +371,11 @@ class ThreeGAgent:
             # If 404 occurs because a previously persisted environment ID has expired on Google's servers:
             if ("404" in err_msg or "not found" in err_msg.lower() or "not_found" in err_msg.lower()) and isinstance(env_payload, str):
                 reporter.environment("Sandbox expired. Provisioning fresh container...")
-                logger.warning(
+                logger.info(
                     "Remote container Environment ID '%s' not found (expired). "
                     "Resetting local state and provisioning a fresh remote sandbox...",
                     env_payload,
                 )
-                print(f"\n[!] Previous remote sandbox '{env_payload}' expired or not found. Provisioning fresh container...")
                 self.environment.reset_environment()
                 fresh_env_payload = self.environment.build_environment_payload(
                     sources=remote_sources,
@@ -337,11 +430,11 @@ class ThreeGAgent:
                         increment_turn=True,
                     )
 
-        # 6. File Accessibility: capture and save files locally
-        output_text = getattr(interaction, "output_text", str(interaction))
+        # 6. Extract only the clean text response and capture local files
+        output_text = extract_interaction_text(interaction, fallback_streamed="".join(streamed_chunks))
         saved_files: List[SavedFile] = []
         if save_deliverables_locally:
-            saved_files = self.storage.capture_remote_interaction_files(interaction)
+            saved_files = self.storage.capture_remote_interaction_files(interaction, output_text=output_text)
 
         logger.info(
             "Turn completed. Agent: %s, Session: %s, Environment ID: %s, Local files: %d",

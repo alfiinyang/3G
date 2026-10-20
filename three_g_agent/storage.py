@@ -146,7 +146,11 @@ class FileStorageManager:
 
         return saved
 
-    def capture_remote_interaction_files(self, interaction: Any) -> List[SavedFile]:
+    def capture_remote_interaction_files(
+        self,
+        interaction: Any,
+        output_text: Optional[str] = None,
+    ) -> List[SavedFile]:
         """Downloads and stores locally any files returned by the remote sandbox interaction."""
         saved_files: List[SavedFile] = []
 
@@ -178,9 +182,9 @@ class FileStorageManager:
                     logger.warning("Failed capturing remote file %s: %s", item, err)
 
         # 2. Extract deliverables embedded in output text
-        output_text = getattr(interaction, "output_text", "")
-        if output_text:
-            extracted = self.extract_and_save_deliverables(output_text)
+        text_to_scan = output_text if output_text is not None else getattr(interaction, "output_text", "")
+        if isinstance(text_to_scan, str) and text_to_scan.strip():
+            extracted = self.extract_and_save_deliverables(text_to_scan)
             saved_files.extend(extracted)
 
         return saved_files

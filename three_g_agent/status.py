@@ -1,13 +1,10 @@
-"""Real-Time Terminal Status Reporter for 3G-agent Turn Interactions.
+"""Single-Line Dynamic Status Reporter for 3G-agent Turn Interactions.
 
-Displays dynamic live agent statuses in the terminal while the user is waiting
-for the agent to respond during each turn of interaction:
-- Thinking: agent reasoning, analyzing instructions, formulating strategy.
-- Skill Use: loading, mounting, or executing skill stages (e.g. pedagogy-engineering).
-- Tool Call: executing remote sandbox tools, code execution, search, file operations.
-- Tool Result: completion of tool calls.
-- Environment: provisioning or holding persistent remote container session.
-- Responding: generating and streaming response tokens.
+Streamlines terminal feedback while the user is waiting for the agent to respond:
+- Updates strictly on ONE line using carriage return (\r).
+- No line breaks (\n) are printed between phases or status updates.
+- Minimal, clean text (e.g. "Thinking...", "Running tool: code_execution...").
+- Clears the status line completely when done so ONLY the agent's response is displayed.
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ from typing import Callable, Optional
 
 
 class TurnStatusReporter:
-    """Provides dynamic, real-time terminal status feedback during an agent turn."""
+    """Provides a single-line streaming status indicator during an agent turn."""
 
     SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -34,48 +31,43 @@ class TurnStatusReporter:
         self.stream = stream or sys.stdout
         self.is_tty = hasattr(self.stream, "isatty") and self.stream.isatty()
 
-        self._current_phase = "Initializing"
-        self._current_detail = ""
-        self._start_time = time.time()
+        self._current_phase = "Thinking"
+        self._current_text = "Thinking..."
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
-        self._last_logged_phase: Optional[str] = None
+        self._last_line_len = 0
 
-    def start(self, initial_phase: str = "Thinking", initial_detail: str = "Analyzing prompt...") -> "TurnStatusReporter":
-        """Starts the background status animator."""
+    def start(self, initial_phase: str = "Thinking", initial_detail: str = "") -> "TurnStatusReporter":
+        """Starts the single-line streaming status indicator."""
         if not self.enabled:
             return self
 
-        self._current_phase = initial_phase
-        self._current_detail = initial_detail
-        self._start_time = time.time()
-        self._running = True
+        with self._lock:
+            self._current_phase = initial_phase
+            self._current_text = self._format_status(initial_phase, initial_detail)
+            self._running = True
 
         if self.callback:
             try:
-                self.callback(self._current_phase, self._current_detail)
+                self.callback(initial_phase, initial_detail)
             except Exception:
                 pass
 
-        if not self.is_tty:
-            # For non-interactive logs, print immediate initial status
-            self._print_static_status(self._current_phase, self._current_detail)
-            self._last_logged_phase = self._current_phase
+        if self.is_tty:
+            self._thread = threading.Thread(target=self._animate, daemon=True, name="3g-status-reporter")
+            self._thread.start()
 
-        self._thread = threading.Thread(target=self._animate, daemon=True, name="3g-status-reporter")
-        self._thread.start()
         return self
 
     def update_status(self, phase: str, detail: str = "") -> None:
-        """Updates the active status phase and detail."""
+        """Updates the status text in-place on the single active line."""
         if not self.enabled:
             return
 
         with self._lock:
-            old_phase = self._current_phase
             self._current_phase = phase
-            self._current_detail = detail
+            self._current_text = self._format_status(phase, detail)
 
         if self.callback:
             try:
@@ -83,122 +75,94 @@ class TurnStatusReporter:
             except Exception:
                 pass
 
-        if not self.is_tty:
-            # Print status change on non-TTY streams
-            if phase != self._last_logged_phase or detail:
-                self._print_static_status(phase, detail)
-                self._last_logged_phase = phase
-        else:
-            # On TTY, if major phase changed, print a permanent checkpoint line
-            if old_phase != phase:
-                elapsed = time.time() - self._start_time
-                icon = self._get_phase_icon(old_phase)
-                try:
-                    self.stream.write(f"\r\033[K  {icon} [Agent Status: {old_phase}] Active ({elapsed:.1f}s)\n")
-                    self.stream.flush()
-                except Exception:
-                    pass
+    def _format_status(self, phase: str, detail: str = "") -> str:
+        """Formats a concise, minimal status label without extraneous noise."""
+        clean_detail = detail.strip() if detail else ""
+        if len(clean_detail) > 40:
+            clean_detail = clean_detail[:37] + "..."
 
-    def thinking(self, detail: str = "Reasoning through prompt...") -> None:
-        """Sets status to Thinking."""
+        if phase == "Thinking":
+            if clean_detail and clean_detail not in ("Reasoning through prompt...", "Analyzing prompt..."):
+                return f"Thinking ({clean_detail})..."
+            return "Thinking..."
+        elif phase == "Skill Use":
+            return f"Using skill: {clean_detail}..." if clean_detail else "Using skill..."
+        elif phase == "Tool Call":
+            return f"Running tool: {clean_detail}..." if clean_detail else "Running tool..."
+        elif phase == "Tool Result":
+            return f"Tool completed: {clean_detail}..." if clean_detail else "Tool completed..."
+        elif phase == "Environment":
+            return "Preparing sandbox environment..."
+        elif phase == "Responding":
+            return "Generating response..."
+        elif phase == "Complete":
+            return ""
+        return f"{phase}..." if not clean_detail else f"{phase}: {clean_detail}..."
+
+    def thinking(self, detail: str = "") -> None:
         self.update_status("Thinking", detail)
 
     def skill_use(self, skill_name: str, stage: str = "") -> None:
-        """Sets status to Skill Use."""
-        detail = f"Applying skill '{skill_name}'"
+        detail = skill_name
         if stage:
             detail += f" ({stage})"
         self.update_status("Skill Use", detail)
 
     def tool_call(self, tool_name: str, args_summary: str = "") -> None:
-        """Sets status to Tool Call."""
-        detail = f"Executing '{tool_name}'"
+        detail = tool_name
         if args_summary:
             detail += f" ({args_summary})"
         self.update_status("Tool Call", detail)
 
     def tool_result(self, tool_name: str, result_summary: str = "") -> None:
-        """Sets status to Tool Result."""
-        detail = f"Completed '{tool_name}'"
+        detail = tool_name
         if result_summary:
-            detail += f" -> {result_summary}"
+            detail += f": {result_summary}"
         self.update_status("Tool Result", detail)
 
-    def environment(self, detail: str) -> None:
-        """Sets status to Environment."""
+    def environment(self, detail: str = "") -> None:
         self.update_status("Environment", detail)
 
-    def responding(self, detail: str = "Generating response tokens...") -> None:
-        """Sets status to Responding."""
+    def responding(self, detail: str = "") -> None:
         self.update_status("Responding", detail)
 
-    def complete(self, detail: str = "Done") -> None:
-        """Stops the reporter with completion status."""
+    def complete(self, detail: str = "") -> None:
         self.stop(final_message=detail)
 
     def stop(self, final_message: Optional[str] = None) -> None:
-        """Stops the background animator and cleans up the terminal line."""
+        """Stops the status reporter and cleanly erases the line so only agent output is shown."""
         if not self._running:
             return
 
         self._running = False
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=0.4)
 
-        elapsed = time.time() - self._start_time
-        if self.is_tty:
+        # Clear the single status line completely so the screen is completely clean
+        if self.is_tty and self._last_line_len > 0:
             try:
-                msg = final_message or "Complete"
-                self.stream.write(f"\r\033[K  ✔ [Agent Status: Complete] {msg} ({elapsed:.1f}s)\n")
+                self.stream.write("\r" + (" " * self._last_line_len) + "\r")
                 self.stream.flush()
             except Exception:
                 pass
-        elif final_message:
-            self._print_static_status("Complete", f"{final_message} ({elapsed:.1f}s)")
-
-    def _print_static_status(self, phase: str, detail: str) -> None:
-        icon = self._get_phase_icon(phase)
-        text = f"{icon} [Agent Status: {phase}]"
-        if detail:
-            text += f" {detail}"
-        try:
-            self.stream.write(f"{text}\n")
-            self.stream.flush()
-        except Exception:
-            pass
-
-    def _get_phase_icon(self, phase: str) -> str:
-        mapping = {
-            "Thinking": "🤔",
-            "Skill Use": "⚡",
-            "Tool Call": "🛠️",
-            "Tool Result": "✔",
-            "Environment": "🌐",
-            "Responding": "✍️",
-            "Complete": "✔",
-            "Error": "❌",
-        }
-        return mapping.get(phase, "⚙️")
+            self._last_line_len = 0
 
     def _animate(self) -> None:
         frame_idx = 0
         while self._running:
-            if self.is_tty:
-                with self._lock:
-                    phase = self._current_phase
-                    detail = self._current_detail
+            with self._lock:
+                text = self._current_text
 
-                elapsed = time.time() - self._start_time
+            if text:
                 frame = self.SPINNER_FRAMES[frame_idx % len(self.SPINNER_FRAMES)]
-                icon = self._get_phase_icon(phase)
-
-                line = f"\r\033[K{frame} {icon} [Agent Status: {phase}] {detail} ({elapsed:.1f}s)"
+                line = f"{frame} {text}"
+                padding = max(0, self._last_line_len - len(line))
                 try:
-                    self.stream.write(line)
+                    self.stream.write(f"\r{line}{' ' * padding}")
                     self.stream.flush()
+                    self._last_line_len = len(line)
                 except Exception:
                     pass
-
                 frame_idx += 1
             time.sleep(0.08)
 
@@ -207,7 +171,4 @@ class TurnStatusReporter:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        if exc_type is not None:
-            self.stop(final_message="Interrupted or Error encountered")
-        else:
-            self.stop()
+        self.stop()

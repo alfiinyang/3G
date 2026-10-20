@@ -8,7 +8,7 @@ Provides an autonomous agent using the Antigravity SDK with:
 - Full local file accessibility and artifact management
 """
 
-from .agent import ThreeGAgent, ThreeGAgentResponse
+from .agent import ThreeGAgent, ThreeGAgentResponse, extract_interaction_text
 from .config import ClientParameterCollector, ThreeGAgentConfig, resolve_default_agent_id
 from .creator import AgentCreationResult, AgentCreationSpec, AgentCreator
 from .deletion import AgentDeletionManager, DeletionResult
@@ -23,6 +23,7 @@ __all__ = [
     "ThreeGAgent",
     "ThreeGAgentConfig",
     "ThreeGAgentResponse",
+    "extract_interaction_text",
     "ClientParameterCollector",
     "AgentClientInitializer",
     "ModelInitializer",
