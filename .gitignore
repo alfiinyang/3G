@@ -1,0 +1,82 @@
+# ==============================================================================
+# 3G-agent & Antigravity Runtime Artifacts
+# ==============================================================================
+# Local session state & remote environment ID persistence (do NOT commit secrets/IDs)
+.3g_agent/
+.3g_agent*/
+
+# Agent generated deliverables, reports, and downloaded artifacts
+outputs/
+
+# Temporary run/state files
+*.tmp
+
+# Logs
+*.log
+
+# ==============================================================================
+# Secrets, Credentials & Local Environment Files
+# ==============================================================================
+.env
+.env.*
+*.env
+*.key
+*.pem
+*service-account*.json
+*credentials*.json
+
+# ==============================================================================
+# Python Bytecode & Build Artifacts
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging & distribution
+build/
+dist/
+eggs/
+*.egg-info/
+*.egg
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ==============================================================================
+# Virtual Environments
+# ==============================================================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==============================================================================
+# IDE & Editor Configurations
+# ==============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ==============================================================================
+# Operating System Artifacts
+# ==============================================================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
