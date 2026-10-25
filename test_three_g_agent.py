@@ -553,6 +553,64 @@ End of document.
         self.assertNotIn("raw_api_dump", extracted_empty)
 
 
+class DeliverableExtractorTests(unittest.TestCase):
+    """Verifies that FileStorageManager extracts deliverables without premature truncation on nested blocks."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="test_storage_")
+        self.storage = FileStorageManager(output_dir=self.test_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_nested_code_blocks_in_markdown_do_not_truncate(self):
+        output = (
+            "Here is the complete plan:\n\n"
+            "````markdown:complete_plan.md\n"
+            "# Section 1: Intro\n"
+            "Text before diagram\n"
+            "```mermaid\n"
+            "graph TD\n"
+            "A --> B\n"
+            "```\n"
+            "## Section 2: Details\n"
+            "```python\n"
+            "x = 42\n"
+            "```\n"
+            "## Section 3: Summary\n"
+            "Final conclusion text.\n"
+            "````\n"
+        )
+        saved = self.storage.extract_and_save_deliverables(output)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].file_name, "complete_plan.md")
+        content = Path(saved[0].local_path).read_text(encoding="utf-8")
+        self.assertIn("Section 1: Intro", content)
+        self.assertIn("graph TD", content)
+        self.assertIn("Section 2: Details", content)
+        self.assertIn("x = 42", content)
+        self.assertIn("Final conclusion text.", content)
+
+    def test_three_backtick_nested_markdown_extraction(self):
+        output = (
+            "```markdown:three_tick_plan.md\n"
+            "# Plan Start\n"
+            "```mermaid\n"
+            "graph LR\n"
+            "Start --> End\n"
+            "```\n"
+            "# Plan End\n"
+            "```\n"
+        )
+        saved = self.storage.extract_and_save_deliverables(output)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].file_name, "three_tick_plan.md")
+        content = Path(saved[0].local_path).read_text(encoding="utf-8")
+        self.assertIn("# Plan Start", content)
+        self.assertIn("graph LR", content)
+        self.assertIn("# Plan End", content)
+
+
 if __name__ == "__main__":
     unittest.main()
 

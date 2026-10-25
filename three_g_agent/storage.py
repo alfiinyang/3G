@@ -102,47 +102,159 @@ class FileStorageManager:
         logger.info("Saved local file: %s (%d bytes) -> %s", relative_name, size_bytes, file_uri)
         return record
 
+    @staticmethod
+    def _parse_opening_fence(line: str) -> Optional[tuple[int, str]]:
+        """Detects if a line opens a code fence specifying a file deliverable.
+        
+        Supports:
+          - ````markdown:pedagogical_plan.md
+          - ```path/to/file.ext
+          - ````python [sim.py]
+          - ````python filename="sim.py" or file="sim.py"
+          
+        Returns (fence_length, clean_filename) or None.
+        """
+        stripped = line.strip()
+        if not stripped.startswith("```"):
+            return None
+
+        m_fence = re.match(r"^(`{3,})", stripped)
+        if not m_fence:
+            return None
+        fence_len = len(m_fence.group(1))
+        rest = stripped[fence_len:].strip()
+        if not rest:
+            return None
+
+        # Pattern A: lang:filename.ext or :filename.ext
+        m_colon = re.match(r"^(?:[a-zA-Z0-9_\-]+)?:\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\s*$", rest)
+        if m_colon:
+            return fence_len, Path(m_colon.group(1)).name
+
+        # Pattern B: direct filename.ext
+        m_direct = re.match(r"^([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]{1,8})\s*$", rest)
+        if m_direct and not m_direct.group(1).startswith(("python3.", "py3.")):
+            return fence_len, Path(m_direct.group(1)).name
+
+        # Pattern C: lang [filename.ext] or [filename.ext]
+        m_bracket = re.match(r"^(?:[a-zA-Z0-9_\-]+)?\s*\[([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\]\s*$", rest)
+        if m_bracket:
+            return fence_len, Path(m_bracket.group(1)).name
+
+        # Pattern D: lang filename="file.ext" or file="file.ext" or name="file.ext"
+        m_named = re.match(r"^(?:[a-zA-Z0-9_\-]+)?\s*(?:filename|file|name)=[\"']([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)[\"']\s*$", rest)
+        if m_named:
+            return fence_len, Path(m_named.group(1)).name
+
+        return None
+
     def extract_and_save_deliverables(self, output_text: str) -> List[SavedFile]:
         """Extracts marked code blocks or deliverable files from the agent's output text.
         
-        Detects patterns such as:
-          - ```[language]:[path/to/file]
-          - <!-- FILE: path/to/file -->
-          - ### Deliverable: [path/to/file]
+        Properly handles nested code blocks inside markdown files (e.g. mermaid diagrams,
+        code snippets, ASCII diagrams) without premature truncation.
         """
         saved: List[SavedFile] = []
+        saved_names: set[str] = set()
 
-        # Pattern 1: ```lang:filepath or ```filepath
-        code_block_pattern = re.compile(
-            r"```(?:[a-zA-Z0-9_\-]+:)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\s*\n(.*?)```",
-            re.DOTALL,
-        )
-        for match in code_block_pattern.finditer(output_text):
-            filename, file_content = match.groups()
-            clean_filename = Path(filename).name
-            if clean_filename:
-                record = self.save_file(
-                    relative_name=clean_filename,
-                    content=file_content,
-                    source_type="extracted_block",
-                )
-                saved.append(record)
-
-        # Pattern 2: Explicit deliverable marker <!-- FILE: filename.ext --> content <!-- END FILE -->
+        # Pattern 1: Explicit deliverable marker <!-- FILE: filename.ext --> content <!-- END FILE -->
         marker_pattern = re.compile(
-            r"<!--\s*FILE:\s*([a-zA-Z0-9_\-\.\/]+)\s*-->\s*\n?(.*?)<!--\s*END FILE\s*-->",
+            r"<!--\s*(?:FILE|DELIVERABLE):\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\s*-->\s*\n?(.*?)<!--\s*END (?:FILE|DELIVERABLE)\s*-->",
             re.DOTALL | re.IGNORECASE,
         )
         for match in marker_pattern.finditer(output_text):
             filename, file_content = match.groups()
             clean_filename = Path(filename).name
-            if clean_filename:
+            if clean_filename and clean_filename not in saved_names:
                 record = self.save_file(
                     relative_name=clean_filename,
                     content=file_content.strip(),
                     source_type="extracted_marker",
                 )
                 saved.append(record)
+                saved_names.add(clean_filename)
+
+        # Pattern 2: Sequential fence scanner with nested block tracking
+        lines = output_text.splitlines()
+        i = 0
+        num_lines = len(lines)
+
+        while i < num_lines:
+            line = lines[i]
+            fence_info = self._parse_opening_fence(line)
+            if fence_info:
+                fence_len, clean_filename = fence_info
+                if clean_filename in saved_names:
+                    i += 1
+                    continue
+
+                is_markdown = clean_filename.lower().endswith((".md", ".markdown", ".mdown", ".mkd", ".txt"))
+                block_lines: List[str] = []
+                inner_depth = 0
+                i += 1
+
+                while i < num_lines:
+                    curr_line = lines[i]
+
+                    # If outer fence opened with 4+ backticks:
+                    if fence_len >= 4:
+                        if re.match(rf"^\s*`{{{fence_len},}}\s*$", curr_line):
+                            i += 1
+                            break
+                        # If a new deliverable starts with >= fence_len backticks:
+                        elif self._parse_opening_fence(curr_line):
+                            m_new = re.match(r"^\s*(`{3,})", curr_line)
+                            if m_new and len(m_new.group(1)) >= fence_len:
+                                break
+                        block_lines.append(curr_line)
+                        i += 1
+                    else:
+                        # 3-backtick outer fence
+                        if is_markdown:
+                            new_file_info = self._parse_opening_fence(curr_line)
+                            if new_file_info:
+                                # A new deliverable block begins
+                                break
+
+                            # Inner code block open (e.g. ```mermaid, ```python)
+                            is_inner_open = bool(re.match(r"^\s*`{3,}[a-zA-Z0-9_\-]+\s*$", curr_line))
+                            is_bare_fence = bool(re.match(r"^\s*`{3,}\s*$", curr_line))
+
+                            if is_inner_open:
+                                inner_depth += 1
+                                block_lines.append(curr_line)
+                                i += 1
+                            elif is_bare_fence:
+                                if inner_depth > 0:
+                                    inner_depth -= 1
+                                    block_lines.append(curr_line)
+                                    i += 1
+                                else:
+                                    # Outer closing fence
+                                    i += 1
+                                    break
+                            else:
+                                block_lines.append(curr_line)
+                                i += 1
+                        else:
+                            # Non-markdown: first bare fence of at least fence_len closes it
+                            if re.match(rf"^\s*`{{{fence_len},}}\s*$", curr_line):
+                                i += 1
+                                break
+                            block_lines.append(curr_line)
+                            i += 1
+
+                content = "\n".join(block_lines)
+                if content.strip():
+                    record = self.save_file(
+                        relative_name=clean_filename,
+                        content=content,
+                        source_type="extracted_block",
+                    )
+                    saved.append(record)
+                    saved_names.add(clean_filename)
+            else:
+                i += 1
 
         return saved
 
