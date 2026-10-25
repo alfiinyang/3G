@@ -22,6 +22,15 @@ from .skills import SkillLoader
 logger = logging.getLogger("3G-agent.creator")
 
 
+def _field(obj: Any, name: str) -> Any:
+    """Reads a field from an SDK model object or a plain dict."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 @dataclass
 class AgentCreationSpec:
     """Specification required to create a new Antigravity agent on the SDK API.
@@ -114,7 +123,7 @@ class AgentCreator:
         candidate_files = []
         if spec.instructions_file:
             candidate_files.append(Path(spec.instructions_file).resolve())
-        candidate_files.extend([Path("./instructions.txt").resolve(), Path("./instructions.md").resolve()])
+        candidate_files.append(Path("./instructions.md").resolve())
 
         for instr_path in candidate_files:
             if instr_path.is_file():
@@ -150,10 +159,19 @@ class AgentCreator:
                 "Antigravity SDK client is required to create an agent via the SDK API (client.agents.create)."
             )
 
+        # Persist skills + instructions in the agent's remote base environment.
+        # This is the ONLY time local skills/instructions are uploaded; existing
+        # agents rely on what persists in their remote environment.
+        base_sources: List[Dict[str, Any]] = loader.build_remote_sources()
+        if instructions_content:
+            for target in (".agents/instructions.md", ".agents/AGENTS.md"):
+                base_sources.append({"type": "inline", "target": target, "content": instructions_content})
+
         create_kwargs: Dict[str, Any] = {
             "id": clean_id,
             "base_agent": spec.base_agent,
             "description": description,
+            "base_environment": {"type": "remote", "sources": base_sources},
         }
         if instructions_content:
             create_kwargs["system_instruction"] = instructions_content
@@ -232,6 +250,84 @@ class AgentCreator:
         except Exception as err:
             logger.debug("Antigravity SDK API client.agents.get('%s') error: %s", clean_id, err)
             return None
+
+    @classmethod
+    def describe_agent_capabilities(cls, agent_id: str, client_handle: Optional[Any] = None) -> Dict[str, Any]:
+        """Fetches an agent from the SDK API and extracts its custom skills and tools.
+
+        Skills are discovered from `base_environment.sources` entries targeting
+        `.agents/skills/<name>/SKILL.md`; tools come from `agent.tools`.
+        Returns {"found", "skills": [{name, description, files}], "tools": [{type, name, detail}],
+                 "has_instructions": bool}.
+        """
+        result: Dict[str, Any] = {"found": False, "skills": [], "tools": [], "has_instructions": False}
+        agent = cls.get_agent(agent_id, client_handle)
+        if agent is None:
+            return result
+        result["found"] = True
+        result["has_instructions"] = bool(_field(agent, "system_instruction"))
+
+        # --- Skills from the persisted remote base environment ---
+        env = _field(agent, "base_environment")
+        sources = _field(env, "sources") if env is not None and not isinstance(env, str) else None
+        skills: Dict[str, Dict[str, Any]] = {}
+        for src in sources or []:
+            target = str(_field(src, "target") or "")
+            parts = target.replace("\\", "/").split("/")
+            if len(parts) >= 4 and parts[0] == ".agents" and parts[1] == "skills":
+                name = parts[2]
+                entry = skills.setdefault(name, {"name": name, "description": "", "files": 0})
+                entry["files"] += 1
+                if parts[-1] == "SKILL.md" and len(parts) == 4:
+                    content = str(_field(src, "content") or "")
+                    fm_name, fm_desc, _ = SkillLoader(Path("."), autoload=False)._extract_frontmatter(content)
+                    if fm_desc:
+                        entry["description"] = fm_desc
+                    if fm_name:
+                        entry["name"] = fm_name
+            elif parts[-1] in ("AGENTS.md", "instructions.md") and parts[0] == ".agents":
+                result["has_instructions"] = True
+        result["skills"] = list(skills.values())
+
+        # --- Custom tools ---
+        for tool in _field(agent, "tools") or []:
+            t_type = str(_field(tool, "type") or type(tool).__name__)
+            t_name = _field(tool, "name") or ""
+            detail = _field(tool, "description") or _field(tool, "url") or ""
+            result["tools"].append({"type": t_type, "name": str(t_name), "detail": str(detail)})
+
+        return result
+
+    @classmethod
+    def display_agent_capabilities(cls, agent_id: str, client_handle: Optional[Any] = None) -> Dict[str, Any]:
+        """Fetches (from the API) and prints the agent's custom skills and tools."""
+        caps = cls.describe_agent_capabilities(agent_id, client_handle)
+        print("\n" + "-" * 65)
+        print(f"  Agent '{agent_id}' Capabilities (fetched via client.agents.get)")
+        print("-" * 65)
+        if not caps["found"]:
+            print("  [!] Could not fetch agent details from the API.")
+            return caps
+
+        print(f"  System Instructions : {'Persisted' if caps['has_instructions'] else 'None'}")
+        print(f"  Custom Skills ({len(caps['skills'])}):")
+        if caps["skills"]:
+            for s in caps["skills"]:
+                desc = f" - {s['description']}" if s["description"] else ""
+                print(f"    - {s['name']} ({s['files']} file(s)){desc}")
+        else:
+            print("    (none persisted in remote environment)")
+
+        print(f"  Custom Tools ({len(caps['tools'])}):")
+        if caps["tools"]:
+            for t in caps["tools"]:
+                label = t["name"] or t["type"]
+                extra = f" - {t['detail']}" if t["detail"] else ""
+                print(f"    - {label} [{t['type']}]{extra}")
+        else:
+            print("    (none)")
+        print("-" * 65)
+        return caps
 
     @classmethod
     def delete_agent(cls, agent_id: str, client_handle: Optional[Any] = None) -> Any:

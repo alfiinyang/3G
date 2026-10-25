@@ -23,17 +23,20 @@ def resolve_default_agent_id() -> str:
     return env_agent or "antigravity-preview-09-2026"
 
 
+def is_base_agent_id(agent_id: Optional[str]) -> bool:
+    """True if agent_id is a stock Antigravity engine (e.g. 'antigravity-preview-09-2026')
+    rather than a custom agent created via client.agents.create."""
+    return bool(agent_id) and agent_id.strip().lower().startswith("antigravity-")
+
+
 def resolve_default_instructions_file() -> Path:
-    """Finds instructions file, checking instructions.txt first, then instructions.md."""
+    """Finds instructions file, using ANTIGRAVITY_INSTRUCTIONS_FILE env var or instructions.md."""
     env_file = os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE")
     if env_file:
         p = Path(env_file)
         if p.exists():
             return p
-    for candidate in (Path("./instructions.txt"), Path("./instructions.md")):
-        if candidate.is_file():
-            return candidate
-    return Path("./instructions.txt")
+    return Path("./instructions.md")
 
 
 @dataclass
@@ -53,7 +56,7 @@ class ThreeGAgentConfig:
         location: Google Cloud region (e.g., "us-central1").
         max_total_tokens: Optional token limit for agent reasoning and execution.
         system_instruction_override: Optional custom system instructions.
-        instructions_file: Path to instructions.txt / instructions.md holding system prompt.
+        instructions_file: Path to instructions.md holding system prompt.
         extra_sources: Additional files or sources to mount in the remote environment.
         model_name: Optional backwards-compatible alias for agent_id.
     """
@@ -110,7 +113,7 @@ class ThreeGAgentConfig:
             self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
     def load_instructions(self) -> Optional[str]:
-        """Loads system instructions from override or instructions file (txt/md)."""
+        """Loads system instructions from override or instructions file (instructions.md)."""
         if self.system_instruction_override and self.system_instruction_override.strip():
             return self.system_instruction_override.strip()
 
@@ -171,7 +174,7 @@ class ClientParameterCollector:
         return ThreeGAgentConfig(**config_data)
 
     @classmethod
-    def validate(cls, config: ThreeGAgentConfig) -> List[str]:
+    def validate(cls, config: ThreeGAgentConfig, require_skills_dir: bool = True) -> List[str]:
         """Validates configuration parameters and returns a list of warnings or issues.
         
         Raises:
@@ -183,7 +186,7 @@ class ClientParameterCollector:
             # Per requirement: Environment MUST be remote
             errors.append(f"environment_type must be 'remote', got '{config.environment_type}'")
 
-        if not config.skills_dir.exists():
+        if require_skills_dir and not config.skills_dir.exists():
             errors.append(f"Specified skills directory does not exist: {config.skills_dir.resolve()}")
 
         if not config.api_key and not config.vertex_ai:

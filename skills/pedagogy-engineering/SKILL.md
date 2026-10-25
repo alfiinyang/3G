@@ -224,7 +224,8 @@ Execute the following sequence in order:
 2. Audit the completed plan against the **53-Point Validation Checklist**.
 3. Verify that all **23 Completion Criteria** are satisfied.
 4. Confirm that **none of the 18 Failure Conditions** are present.
-5. Finalize and deliver the validated learning plan to the user.
+5. Output the completed, validated learning plan as a `.md` file in an explicit code block (e.g. ````markdown:pedagogical_plan.md````) so it is parsed and saved locally.
+6. In your final response, provide a high-level summary of the plan without repeating the full contents of the file, and direct the user to locate and read the saved `.md` file.
 
 ---
 

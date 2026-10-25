@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-i",
         type=str,
         default=None,
-        help="Path to instructions.txt or instructions.md (default: auto-detected)",
+        help="Path to instructions.md (default: auto-detected)",
     )
     parser.add_argument(
         "--state-dir",
@@ -504,6 +504,9 @@ def main() -> int:
             chosen_agent_id = validate_agent_id(cli_specified_agent)
         except ValueError:
             chosen_agent_id = cli_specified_agent.strip()
+        from .config import is_base_agent_id
+        if not is_base_agent_id(chosen_agent_id):
+            AgentCreator.display_agent_capabilities(chosen_agent_id, initialized_client)
 
     if not chosen_agent_id and is_interactive:
         while True:
@@ -529,6 +532,7 @@ def main() -> int:
                 reused = prompt_for_agent_reuse(initialized_client)
                 if reused:
                     chosen_agent_id = reused
+                    AgentCreator.display_agent_capabilities(reused, initialized_client)
                     break
                 else:
                     # No agents exist, fallback to creation

@@ -177,23 +177,22 @@ class EnvironmentStore:
         self,
         sources: Optional[List[Dict[str, Any]]] = None,
         force_fresh: bool = False,
+        inherit_agent_environment: bool = False,
     ) -> Any:
-        """Constructs the remote environment configuration payload for client.interactions.create.
-        
-        If an active environment ID already exists and force_fresh is False:
-            Reuses the existing remote sandbox container to maintain state.
-        Otherwise:
-            Provisions a fresh remote container with initial sources mounted.
-            
-        Returns:
-            Either an environment dictionary or environment ID string.
-        """
+        """See below. If inherit_agent_environment is True and no sources are given,
+        returns None for a fresh sandbox so the agent's persisted base_environment
+        (skills + instructions uploaded at creation) is used unmodified."""
         active_id = self.get_environment_id()
-
         if active_id and not force_fresh:
             logger.info("Reusing existing remote environment: %s", active_id)
             return active_id
+        if inherit_agent_environment and not sources:
+            logger.info("Fresh sandbox will inherit the agent's persisted base environment.")
+            return None
+        return self._build_fresh_payload(sources)
 
+    def _build_fresh_payload(self, sources: Optional[List[Dict[str, Any]]]) -> Any:
+        """Builds a fresh remote container payload with the given sources mounted."""
         logger.info("Requesting fresh remote sandbox environment...")
         env_config: Dict[str, Any] = {"type": "remote"}
         if sources:

@@ -152,8 +152,14 @@ class ThreeGAgent:
         environment_store: EnvironmentStore,
         storage_manager: FileStorageManager,
         registry: Optional[AgentRegistry] = None,
+        load_local_context: bool = True,
     ) -> None:
-        """Initializes 3G-agent with pre-configured and pre-initialized dependencies."""
+        """Initializes 3G-agent with pre-configured and pre-initialized dependencies.
+
+        load_local_context: If False (existing custom remote agent), local skills and
+        instructions are never read or uploaded; the agent's persisted remote
+        base_environment is used instead.
+        """
         self.config = config
         self.client_handle = initialized_client
         self.client = initialized_client.client
@@ -161,6 +167,7 @@ class ThreeGAgent:
         self.environment = environment_store
         self.storage = storage_manager
         self.registry = registry or AgentRegistry(state_dir=config.state_dir)
+        self.load_local_context = load_local_context
         self.active_session_id: Optional[str] = None
         self.last_interaction_id: Optional[str] = None
 
@@ -179,6 +186,7 @@ class ThreeGAgent:
         project: Optional[str] = None,
         location: Optional[str] = None,
         system_instruction_override: Optional[str] = None,
+        load_local_context: Optional[bool] = None,
     ) -> ThreeGAgent:
         """Factory method to assemble 3G-agent while maintaining clean separation of concerns.
         
@@ -209,13 +217,27 @@ class ThreeGAgent:
             location=location,
             system_instruction_override=system_instruction_override,
         )
-        ClientParameterCollector.validate(config)
+        # Existing custom agents (created via client.agents.create) already hold their
+        # skills + instructions in their remote base_environment: never reload locally.
+        from .config import is_base_agent_id
+        if load_local_context is None:
+            load_local_context = is_base_agent_id(target_agent)
+
+        ClientParameterCollector.validate(config, require_skills_dir=load_local_context)
 
         # Step 2: Separate Client Initialization
         initialized_client = ModelInitializer.initialize(config)
 
-        # Step 3: Skill Discovery & Packaging
-        skill_loader = SkillLoader(config.skills_dir)
+        # Step 3: Skill Discovery & Packaging (only for stock base engines)
+        if load_local_context:
+            skill_loader = SkillLoader(config.skills_dir)
+        else:
+            skill_loader = SkillLoader.empty()
+            logger.info(
+                "Agent '%s' is an existing remote agent: using skills/instructions persisted "
+                "in its remote environment (local files are not loaded).",
+                target_agent,
+            )
 
         # Step 4: Secure Environment Store
         environment_store = EnvironmentStore(
@@ -237,6 +259,7 @@ class ThreeGAgent:
             environment_store=environment_store,
             storage_manager=storage_manager,
             registry=registry,
+            load_local_context=load_local_context,
         )
 
     def execute(
@@ -265,28 +288,31 @@ class ThreeGAgent:
         reporter = status_reporter or TurnStatusReporter(enabled=show_status)
         reporter.start("Thinking", "Analyzing prompt...")
 
-        # 1. Prepare remote sources from loaded skills & instructions
-        skill_names = [s.name for s in self.skills.skills]
-        if skill_names:
-            reporter.skill_use(", ".join(skill_names))
-        remote_sources = self.skills.build_remote_sources()
+        # 1. Prepare remote sources. Local skills & instructions are only used for
+        #    stock base engines; existing custom agents use their persisted remote env.
+        remote_sources: List[Dict[str, Any]] = []
+        system_instructions: Optional[str] = None
+        if self.load_local_context:
+            skill_names = [s.name for s in self.skills.skills]
+            if skill_names:
+                reporter.skill_use(", ".join(skill_names))
+            remote_sources = self.skills.build_remote_sources()
+
+            system_instructions = self.config.load_instructions()
+            if system_instructions:
+                remote_sources.append({
+                    "type": "inline",
+                    "target": ".agents/instructions.md",
+                    "content": system_instructions,
+                })
+                remote_sources.append({
+                    "type": "inline",
+                    "target": ".agents/AGENTS.md",
+                    "content": system_instructions,
+                })
+                logger.info("Loaded system prompt from instructions file into remote environment sources.")
         if additional_sources:
             remote_sources.extend(additional_sources)
-
-        # Mount system instructions from instructions.md if present
-        system_instructions = self.config.load_instructions()
-        if system_instructions:
-            remote_sources.append({
-                "type": "inline",
-                "target": ".agents/instructions.md",
-                "content": system_instructions,
-            })
-            remote_sources.append({
-                "type": "inline",
-                "target": ".agents/AGENTS.md",
-                "content": system_instructions,
-            })
-            logger.info("Loaded system prompt from instructions file into remote environment sources.")
 
         # 2. Build remote environment payload (reuses existing environment_id if active)
         active_env_id = self.environment.get_environment_id()
@@ -298,17 +324,18 @@ class ThreeGAgent:
         env_payload = self.environment.build_environment_payload(
             sources=remote_sources,
             force_fresh=force_fresh_environment,
+            inherit_agent_environment=not self.load_local_context,
         )
 
         # 3. Augment prompt with system instructions & skill catalog context if needed
         full_input = prompt
-        catalog = self.skills.format_skill_catalog()
-        
         context_prefixes = []
-        if system_instructions and not self.environment.get_environment_id():
-            context_prefixes.append(f"<!-- System Instructions -->\n{system_instructions}")
-        if catalog and not self.environment.get_environment_id():
-            context_prefixes.append(f"<!-- Available Skills In Remote Environment -->\n{catalog}")
+        if self.load_local_context and not self.environment.get_environment_id():
+            catalog = self.skills.format_skill_catalog()
+            if system_instructions:
+                context_prefixes.append(f"<!-- System Instructions -->\n{system_instructions}")
+            if catalog:
+                context_prefixes.append(f"<!-- Available Skills In Remote Environment -->\n{catalog}")
 
         if context_prefixes:
             full_input = "\n\n".join(context_prefixes) + f"\n\n{prompt}"
@@ -317,8 +344,9 @@ class ThreeGAgent:
         interaction_kwargs: Dict[str, Any] = {
             "agent": self.config.agent_id,
             "input": full_input,
-            "environment": env_payload,
         }
+        if env_payload is not None:
+            interaction_kwargs["environment"] = env_payload
 
         if self.last_interaction_id and not force_fresh_environment:
             interaction_kwargs["previous_interaction_id"] = self.last_interaction_id
@@ -380,8 +408,12 @@ class ThreeGAgent:
                 fresh_env_payload = self.environment.build_environment_payload(
                     sources=remote_sources,
                     force_fresh=True,
+                    inherit_agent_environment=not self.load_local_context,
                 )
-                interaction_kwargs["environment"] = fresh_env_payload
+                if fresh_env_payload is not None:
+                    interaction_kwargs["environment"] = fresh_env_payload
+                else:
+                    interaction_kwargs.pop("environment", None)
                 if "previous_interaction_id" in interaction_kwargs:
                     del interaction_kwargs["previous_interaction_id"]
                 reporter.thinking("Awaiting Antigravity response in fresh container...")
@@ -403,7 +435,7 @@ class ThreeGAgent:
         if returned_env_id and returned_env_id != "unknown_env":
             self.environment.save_environment_id(
                 environment_id=returned_env_id,
-                skills_signature=self.skills.get_combined_signature(),
+                skills_signature=self.skills.get_combined_signature() if self.load_local_context else None,
                 metadata={"last_prompt_snippet": prompt[:100]},
             )
             # Track and hold environment_id per conversation session in registry

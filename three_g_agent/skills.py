@@ -37,6 +37,7 @@ class Skill:
     skill_md_path: Path
     instruction_content: str
     auxiliary_files: List[SkillFile] = field(default_factory=list)
+    raw_content: str = ""
 
     def get_signature(self) -> str:
         """Returns a deterministic SHA256 signature of the skill content."""
@@ -53,10 +54,17 @@ class Skill:
 class SkillLoader:
     """Discovers, parses, and formats skills from a folder for 3G-agent."""
 
-    def __init__(self, skills_dir: Path | str) -> None:
+    def __init__(self, skills_dir: Path | str, autoload: bool = True) -> None:
         self.skills_dir = Path(skills_dir)
         self.skills: List[Skill] = []
-        self.load_skills()
+        if autoload:
+            self.load_skills()
+
+    @classmethod
+    def empty(cls) -> "SkillLoader":
+        """Returns a loader with no skills (used for existing remote agents whose
+        skills already persist in their remote environment)."""
+        return cls(Path("."), autoload=False)
 
     def load_skills(self) -> List[Skill]:
         """Scans the specified folder and loads all skills found."""
@@ -125,6 +133,7 @@ class SkillLoader:
             skill_md_path=skill_md,
             instruction_content=body,
             auxiliary_files=auxiliary_files,
+            raw_content=content,
         )
 
     def _extract_frontmatter(self, text: str) -> tuple[str, str, str]:
@@ -167,7 +176,7 @@ class SkillLoader:
             sources.append({
                 "type": "inline",
                 "target": f".agents/skills/{skill.name}/SKILL.md",
-                "content": skill.instruction_content,
+                "content": skill.raw_content or skill.instruction_content,
             })
 
             # Mount auxiliary files (stages, scripts, references)
