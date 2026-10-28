@@ -61,7 +61,7 @@ def is_base_agent_id(agent_id: Optional[str]) -> bool:
 
 
 def resolve_default_instructions_file() -> Path:
-    """Finds instructions file, searching instructions/orch_instruction.md, desi_instructions.md, etc."""
+    """Finds instructions file strictly within the /instructions directory."""
     env_file = os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE")
     if env_file:
         p = Path(env_file)
@@ -69,14 +69,12 @@ def resolve_default_instructions_file() -> Path:
             return p
     for candidate in [
         Path("./instructions/orch_instruction.md"),
-        Path("./orch_instruction.md"),
         Path("./instructions/desi_instructions.md"),
-        Path("./desi_instructions.md"),
-        Path("./instructions.md"),
     ]:
         if candidate.exists():
             return candidate
-    return Path("./desi_instructions.md")
+    return Path("./instructions/orch_instruction.md")
+
 
 
 @dataclass
@@ -214,7 +212,7 @@ class ClientParameterCollector:
             skills_dir=resolved_skills_dir,
             state_dir=Path(os.getenv("ANTIGRAVITY_STATE_DIR", "./.3g_agent")),
             output_dir=Path(os.getenv("ANTIGRAVITY_OUTPUT_DIR", "./outputs/3g_agent")),
-            instructions_file=Path(os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE", "./instructions.md")),
+            instructions_file=Path(os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE", "./instructions/orch_instruction.md")),
             vertex_ai=os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() in ("true", "1", "yes"),
             project=os.getenv("GOOGLE_CLOUD_PROJECT"),
             location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),

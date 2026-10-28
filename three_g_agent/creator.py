@@ -46,11 +46,12 @@ class AgentCreationSpec:
     """
     agent_id: str
     skills_dir: Optional[Union[str, Path]] = "./skills"
-    instructions_file: Optional[Union[str, Path]] = "./desi_instructions.md"
+    instructions_file: Optional[Union[str, Path]] = "./instructions/desi_instructions.md"
     description: Optional[str] = None
     base_agent: str = "antigravity-preview-09-2026"
     tools: Optional[List[Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
 
 
 
@@ -133,10 +134,9 @@ class AgentCreator:
             candidate_files.append(Path(spec.instructions_file).resolve())
         candidate_files.extend([
             Path("./instructions/desi_instructions.md").resolve(),
-            Path("./desi_instructions.md").resolve(),
             Path("./instructions/orch_instruction.md").resolve(),
-            Path("./instructions.md").resolve(),
         ])
+
 
         for instr_path in candidate_files:
             if instr_path.is_file():

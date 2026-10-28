@@ -97,17 +97,13 @@ class ThreeGOrchestrator:
         self.state_dir = Path(state_dir)
         self.subagents_dir = Path(subagents_dir)
 
-        # Common instructions resolution
+        # Common instructions resolution (strictly within /instructions directory)
         self.instructions_file = Path(instructions_file) if instructions_file else None
         if self.instructions_file and not self.instructions_file.exists():
-            for alt in [
-                Path("./instructions/orch_instruction.md"),
-                Path("./orch_instruction.md"),
-                Path("./instructions/orch_instruction"),
-            ]:
-                if alt.exists():
-                    self.instructions_file = alt
-                    break
+            alt = Path("./instructions/orch_instruction.md")
+            if alt.exists():
+                self.instructions_file = alt
+
 
         # Orchestrator Configuration: brain = 3.1 flash lite
         self.config = config or ThreeGAgentConfig(

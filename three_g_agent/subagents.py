@@ -217,12 +217,12 @@ class DesignerSubagent:
         self.environment = environment_store
         self.state_dir = Path(state_dir)
 
-        # Confirm instructions file exists or find fallback
+        # Confirm instructions file exists strictly within /instructions
         if self.instructions_file and not self.instructions_file.exists():
-            for alt in [Path("./desi_instructions.md"), Path("./instructions/desi_instructions.md")]:
-                if alt.exists():
-                    self.instructions_file = alt
-                    break
+            alt = Path("./instructions/desi_instructions.md")
+            if alt.exists():
+                self.instructions_file = alt
+
 
         self.tools_allowed = list(FILE_ACCESS_TOOLS)
         self.tools_disabled = list(CODING_EXECUTION_TOOLS)

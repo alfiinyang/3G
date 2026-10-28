@@ -672,15 +672,19 @@ class TestThreeAgentArchitecture(unittest.TestCase):
         """Validates that system prompts strictly avoid negative language (DO NOT) and use ANIR."""
         forbidden_regex = re.compile(r"\b(do\s+not|don't|never|cannot|must\s+not|shall\s+not)\b", re.IGNORECASE)
 
+        # Root instructions must be deleted
+        self.assertFalse(Path("./desi_instructions.md").exists(), "desi_instructions.md must not exist in workspace root")
+        self.assertFalse(Path("./orch_instruction.md").exists(), "orch_instruction.md must not exist in workspace root")
+
         instruction_files = [
             Path("./instructions/orch_instruction.md"),
             Path("./instructions/desi_instructions.md"),
-            Path("./desi_instructions.md"),
         ]
 
         for p in instruction_files:
-            self.assertTrue(p.exists(), f"Instruction file {p} must exist")
+            self.assertTrue(p.exists(), f"Instruction file {p} must exist within /instructions directory")
             text = p.read_text(encoding="utf-8")
+
 
             # 1. Assert zero occurrences of forbidden negative tokens
             matches = forbidden_regex.findall(text)
