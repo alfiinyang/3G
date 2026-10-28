@@ -179,16 +179,19 @@ class EnvironmentStore:
         force_fresh: bool = False,
         inherit_agent_environment: bool = False,
     ) -> Any:
-        """See below. If inherit_agent_environment is True and no sources are given,
-        returns None for a fresh sandbox so the agent's persisted base_environment
-        (skills + instructions uploaded at creation) is used unmodified."""
+        """Builds the environment payload for client.interactions.create.
+        
+        The Antigravity Interactions API requires the 'environment' parameter for every call:
+        - When reusing an existing active sandbox: returns the environment ID string (e.g. "env_xxx").
+        - When provisioning a fresh sandbox: returns {"type": "remote"} (with sources if provided).
+        """
         active_id = self.get_environment_id()
         if active_id and not force_fresh:
             logger.info("Reusing existing remote environment: %s", active_id)
             return active_id
         if inherit_agent_environment and not sources:
             logger.info("Fresh sandbox will inherit the agent's persisted base environment.")
-            return None
+            return {"type": "remote"}
         return self._build_fresh_payload(sources)
 
     def _build_fresh_payload(self, sources: Optional[List[Dict[str, Any]]]) -> Any:

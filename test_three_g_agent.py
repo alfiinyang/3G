@@ -282,6 +282,76 @@ End of document.
         response2 = agent.chat("Proceed to Stage 1.")
         self.assertEqual(response2.environment_id, "env_mock_sandbox_777")
 
+    def test_custom_agent_environment_payload_and_persistence(self):
+        """Verify that when interacting with a custom created agent, 'environment' is ALWAYS
+        passed (preventing 'Missing required field environment' 400 errors) and persists."""
+        from three_g_agent.environment import EnvironmentStore
+
+        env_store = EnvironmentStore(state_dir=self.state_dir, agent_name="custom-agent")
+
+        # 1. Test build_environment_payload directly for custom agent inheriting base env
+        payload = env_store.build_environment_payload(sources=[], force_fresh=False, inherit_agent_environment=True)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload, {"type": "remote"})
+
+        # 2. Test execution flow with a custom agent ID
+        config = ThreeGAgentConfig(
+            agent_name="3G-agent",
+            agent_id="coder-55555",
+            skills_dir=None,
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+
+        captured_calls = []
+
+        class MockCaptureInteraction:
+            def __init__(self, output_text, env_val):
+                self.output_text = output_text
+                self.environment_id = env_val if isinstance(env_val, str) else "env_sandbox_custom_999"
+                self.id = "inter_custom_001"
+
+        class MockCaptureInteractionsClient:
+            def create(self, **kwargs):
+                captured_calls.append(kwargs)
+                return MockCaptureInteraction("Hello from custom agent", kwargs.get("environment"))
+
+        class MockCaptureGenAIClient:
+            def __init__(self):
+                self.interactions = MockCaptureInteractionsClient()
+
+        init_client = ModelInitializer._create_fallback_client(config)
+        init_client.client = MockCaptureGenAIClient()
+
+        agent = ThreeGAgent(
+            config=config,
+            initialized_client=init_client,
+            skill_loader=SkillLoader.empty(),
+            environment_store=env_store,
+            storage_manager=FileStorageManager(output_dir=self.output_dir),
+            load_local_context=False,
+        )
+
+        # Turn 1: Fresh environment must be passed as {"type": "remote"}
+        resp1 = agent.execute("First message to created orchestrator agent")
+        self.assertEqual(len(captured_calls), 1)
+        self.assertIn("environment", captured_calls[0])
+        self.assertEqual(captured_calls[0]["environment"], {"type": "remote"})
+        self.assertEqual(resp1.environment_id, "env_sandbox_custom_999")
+        self.assertEqual(agent.get_environment_id(), "env_sandbox_custom_999")
+
+        # Turn 2: Held environment ID must be passed directly as string
+        resp2 = agent.execute("Second message to created orchestrator agent")
+        self.assertEqual(len(captured_calls), 2)
+        self.assertIn("environment", captured_calls[1])
+        self.assertEqual(captured_calls[1]["environment"], "env_sandbox_custom_999")
+        self.assertEqual(captured_calls[1].get("previous_interaction_id"), "inter_custom_001")
+
+        # Verify held environment ID across sessions
+        sessions = agent.list_conversations()
+        self.assertGreaterEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].environment_id, "env_sandbox_custom_999")
+
     def test_validate_agent_id_format(self):
         """Test agent_id format validation for [name-id_num] e.g. [coder-12345]."""
         from three_g_agent.registry import validate_agent_id
@@ -341,6 +411,37 @@ End of document.
         # Verify zero local storage: no local agent registry file exists
         local_agent_file = self.state_dir / "agents_registry.json"
         self.assertFalse(local_agent_file.exists())
+
+    def test_initial_orchestrator_creation_without_skills(self):
+        """When an agent is initially created by user, it is the orchestrator agent that is created.
+        The orchestrator doesn't need any special skills, so no skills are loaded at creation."""
+        from three_g_agent.creator import AgentCreationSpec, AgentCreator
+        from three_g_agent.initializer import AgentClientInitializer
+        from three_g_agent.config import ThreeGAgentConfig
+
+        config = ThreeGAgentConfig(
+            skills_dir=None,
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+        client_handle = AgentClientInitializer.initialize(config, interactive_prompt=False)
+
+        # Default AgentCreationSpec represents the initial orchestrator agent creation:
+        # skills_dir is None (no special skills), instructions_file defaults to orch_instruction.md
+        spec = AgentCreationSpec(agent_id="orch-00001")
+        self.assertIsNone(spec.skills_dir)
+        self.assertEqual(Path(spec.instructions_file), Path("./instructions/orch_instruction.md"))
+
+        result = AgentCreator.create_agent(spec=spec, client_handle=client_handle)
+        self.assertEqual(result.agent_id, "orch-00001")
+        self.assertEqual(result.skills_count, 0)
+        self.assertEqual(result.stages_count, 0)
+        self.assertTrue(result.has_instructions)
+        self.assertGreater(result.instructions_length, 0)
+        self.assertEqual(result.model, "gemini-3.1-flash-lite")
+        self.assertEqual(result.agent_config, {"model": "gemini-3.1-flash-lite"})
+        self.assertEqual(result.remote_agent.agent_config, {"model": "gemini-3.1-flash-lite"})
+
 
     def test_agent_registry_and_conversation_persistence(self):
         """Test reusing existing agent and holding environment_id across conversations."""

@@ -155,13 +155,20 @@ class ThreeGAgentConfig:
         self.model = self.agent_id
         self.brain = self.agent_id
 
-        # Resolve API Key from environment if not explicitly passed
+        # Resolve API Key from environment or .env if not explicitly passed
         if not self.api_key:
+            from .initializer import load_dotenv_if_present
+            load_dotenv_if_present()
             self.api_key = (
                 os.getenv("GEMINI_API_KEY")
                 or os.getenv("GOOGLE_API_KEY")
                 or os.getenv("ANTIGRAVITY_API_KEY")
             )
+
+        if self.api_key:
+            self.api_key = self.api_key.strip()
+            if (self.api_key.startswith('"') and self.api_key.endswith('"')) or (self.api_key.startswith("'") and self.api_key.endswith("'")):
+                self.api_key = self.api_key[1:-1].strip()
 
         # Resolve GCP Project from environment if not explicitly passed
         if not self.project:

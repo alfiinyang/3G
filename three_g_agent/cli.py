@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 from .agent import ThreeGAgent
-from .config import ClientParameterCollector, ThreeGAgentConfig, resolve_default_agent_id
+from .config import (
+    ClientParameterCollector,
+    MODEL_ORCHESTRATOR,
+    ThreeGAgentConfig,
+    canonicalize_model_name,
+    resolve_default_agent_id,
+)
 from .creator import AgentCreationSpec, AgentCreator
 from .deletion import AgentDeletionManager, DeletionResult
 from .initializer import AgentClientInitializer, InitializedClient
@@ -166,17 +172,19 @@ def prompt_for_agent_creation(
             print(f"[!] {val_err}")
             print("Please try again with a valid format (e.g. coder-12345, pedagogy-001).")
 
-    description = input("Enter Agent Description (optional, press Enter to skip): ").strip() or None
+    description = input("Enter Agent Description (optional, press Enter to skip): ").strip() or "Antigravity Orchestrator Agent"
 
-    print(f"\n[>] Pre-loading skills from: {skills_path}...")
-    print(f"[>] Pre-loading instructions from: {instructions_path}...")
+    print(f"\n[>] Creating Orchestrator agent '{validated_id}' (no special skills needed)...")
+    print(f"[>] Pre-loading system instructions from: {instructions_path}...")
 
     spec = AgentCreationSpec(
         agent_id=validated_id,
-        skills_dir=skills_path,
+        skills_dir=None,  # Orchestrator does not need any special skills
         instructions_file=instructions_path,
         description=description,
         base_agent="antigravity-preview-09-2026",
+        model=MODEL_ORCHESTRATOR,
+        agent_config={"model": canonicalize_model_name(MODEL_ORCHESTRATOR)},
     )
 
     result = AgentCreator.create_agent(
@@ -187,6 +195,8 @@ def prompt_for_agent_creation(
     print("\n" + "=" * 65)
     print(f"  [+] Agent '{result.agent_id}' Successfully Created on Antigravity SDK API!")
     print("=" * 65)
+    print(f"  Brain / Model          : {result.model or MODEL_ORCHESTRATOR}")
+    print(f"  Agent Config           : {result.agent_config}")
     print(f"  Pre-loaded Skills      : {result.skills_count} package(s) ({result.stages_count} stages/auxiliary files)")
     print(f"  System Instructions    : {'Pre-loaded (' + str(result.instructions_length) + ' chars)' if result.has_instructions else 'None'}")
     print(f"  Remote Engine          : antigravity-preview-09-2026")

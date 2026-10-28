@@ -234,16 +234,20 @@ Measurable Objective: Deconstruct feed-rate anomalies under variable flour densi
     validated = validate_agent_id(test_agent_id)
     spec = AgentCreationSpec(
         agent_id=validated,
-        skills_dir=skills_folder,
-        instructions_file=common_instr_dir / "desi_instructions.md",
-        description="Demo autonomous coder agent for script creation",
+        skills_dir=None,  # Orchestrator does not need any special skills
+        instructions_file=common_instr_dir / "orch_instruction.md",
+        description="Antigravity Orchestrator Agent",
         base_agent="antigravity-preview-09-2026",
     )
     creation_result = AgentCreator.create_agent(
         spec=spec,
         client_handle=orchestrator.client_handle,
     )
-    print(f"  [+] Agent '{creation_result.agent_id}' Created on SDK API!")
+    print(f"  [+] Orchestrator Agent '{creation_result.agent_id}' Created on SDK API!")
+    print(f"      - Brain / Model     : {creation_result.model}")
+    print(f"      - Agent Config      : {creation_result.agent_config}")
+    print(f"      - Skills Pre-loaded : {creation_result.skills_count} (orchestrator needs no special skills)")
+
 
     del_result = AgentDeletionManager.delete_agent(
         agent_id=validated,

@@ -151,12 +151,18 @@
 pip install -r requirements.txt
 ```
 
-Set your Gemini API key (or authenticate via Google Cloud ADC):
+Set your Gemini API key (via `.env` file, persistent Windows environment variable, or session variable):
 ```bash
-# Windows PowerShell:
+# Option A: Create a .env file in the project root (Recommended)
+GEMINI_API_KEY=your-api-key-here
+
+# Option B: Windows PowerShell (Persistent across terminal tabs and sessions):
+[System.Environment]::SetEnvironmentVariable('GEMINI_API_KEY', 'your-api-key-here', 'User')
+
+# Option C: Windows PowerShell (Current terminal session only):
 $env:GEMINI_API_KEY="your-api-key-here"
 
-# Linux / macOS:
+# Option D: Linux / macOS:
 export GEMINI_API_KEY="your-api-key-here"
 ```
 

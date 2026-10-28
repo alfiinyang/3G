@@ -175,13 +175,13 @@ class ThreeGAgent:
     @classmethod
     def create(
         cls,
-        skills_dir: Union[str, Path] = "./skills",
+        skills_dir: Optional[Union[str, Path]] = None,
         agent_id: Optional[str] = None,
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         state_dir: Union[str, Path] = "./.3g_agent",
         output_dir: Union[str, Path] = "./outputs/3g_agent",
-        instructions_file: Union[str, Path, None] = "./instructions.md",
+        instructions_file: Optional[Union[str, Path]] = None,
         vertex_ai: bool = False,
         project: Optional[str] = None,
         location: Optional[str] = None,
@@ -190,9 +190,9 @@ class ThreeGAgent:
     ) -> ThreeGAgent:
         """Factory method to assemble 3G-agent while maintaining clean separation of concerns.
         
-        1. Parameter Collection: Collects and validates parameters (including instructions.md).
+        1. Parameter Collection: Collects and validates parameters.
         2. Client Initialization: Creates the client connection targeting the Antigravity agent.
-        3. Skill Discovery: Loads skills from the designated folder.
+        3. Skill Discovery: Loads skills from folder if provided (Orchestrator requires no skills).
         4. Environment Store: Prepares secure remote environment tracking.
         5. Storage Manager: Prepares local file accessibility infrastructure.
         """
@@ -202,16 +202,19 @@ class ThreeGAgent:
             from .config import resolve_default_agent_id
             target_agent = resolve_default_agent_id()
 
+        from .config import resolve_default_instructions_file
+        resolved_instr = Path(instructions_file) if instructions_file else resolve_default_instructions_file()
+
         # Step 1: Collect parameters
         config = ThreeGAgentConfig(
             agent_name="3G-agent",
             agent_id=target_agent,
             environment_type="remote",  # Mandatory: remote environment
             api_key=api_key,
-            skills_dir=Path(skills_dir),
+            skills_dir=Path(skills_dir) if skills_dir else None,
             state_dir=Path(state_dir),
             output_dir=Path(output_dir),
-            instructions_file=Path(instructions_file) if instructions_file else None,
+            instructions_file=resolved_instr,
             vertex_ai=vertex_ai,
             project=project,
             location=location,
@@ -223,21 +226,21 @@ class ThreeGAgent:
         if load_local_context is None:
             load_local_context = is_base_agent_id(target_agent)
 
-        ClientParameterCollector.validate(config, require_skills_dir=load_local_context)
+        ClientParameterCollector.validate(config, require_skills_dir=load_local_context and config.skills_dir is not None)
 
         # Step 2: Separate Client Initialization
         initialized_client = ModelInitializer.initialize(config)
 
-        # Step 3: Skill Discovery & Packaging (only for stock base engines)
-        if load_local_context:
+        # Step 3: Skill Discovery & Packaging (only when skills_dir provided)
+        if load_local_context and config.skills_dir:
             skill_loader = SkillLoader(config.skills_dir)
         else:
             skill_loader = SkillLoader.empty()
             logger.info(
-                "Agent '%s' is an existing remote agent: using skills/instructions persisted "
-                "in its remote environment (local files are not loaded).",
+                "Agent '%s': no local skills passed or using persisted remote skills.",
                 target_agent,
             )
+
 
         # Step 4: Secure Environment Store
         environment_store = EnvironmentStore(
@@ -344,9 +347,8 @@ class ThreeGAgent:
         interaction_kwargs: Dict[str, Any] = {
             "agent": self.config.agent_id,
             "input": full_input,
+            "environment": env_payload if env_payload is not None else {"type": "remote"},
         }
-        if env_payload is not None:
-            interaction_kwargs["environment"] = env_payload
 
         if self.last_interaction_id and not force_fresh_environment:
             interaction_kwargs["previous_interaction_id"] = self.last_interaction_id
@@ -410,10 +412,9 @@ class ThreeGAgent:
                     force_fresh=True,
                     inherit_agent_environment=not self.load_local_context,
                 )
-                if fresh_env_payload is not None:
-                    interaction_kwargs["environment"] = fresh_env_payload
-                else:
-                    interaction_kwargs.pop("environment", None)
+                interaction_kwargs["environment"] = (
+                    fresh_env_payload if fresh_env_payload is not None else {"type": "remote"}
+                )
                 if "previous_interaction_id" in interaction_kwargs:
                     del interaction_kwargs["previous_interaction_id"]
                 reporter.thinking("Awaiting Antigravity response in fresh container...")
@@ -425,8 +426,21 @@ class ThreeGAgent:
         reporter.complete("Response received")
 
         # 5. Securely capture and persist the remote environment ID
-        returned_env_id = getattr(interaction, "environment_id", None) or (
-            env_payload if isinstance(env_payload, str) else "env_persisted_active"
+        raw_env = getattr(interaction, "environment", None)
+        env_str = (
+            raw_env
+            if isinstance(raw_env, str)
+            else getattr(raw_env, "id", None)
+            if hasattr(raw_env, "id")
+            else getattr(raw_env, "environment_id", None)
+            if hasattr(raw_env, "environment_id")
+            else None
+        )
+        returned_env_id = (
+            getattr(interaction, "environment_id", None)
+            or env_str
+            or (env_payload if isinstance(env_payload, str) else None)
+            or "env_persisted_active"
         )
         interaction_id = getattr(interaction, "id", None)
         if interaction_id:

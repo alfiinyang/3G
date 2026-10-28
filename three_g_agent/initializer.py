@@ -14,7 +14,8 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Optional, Union
 
 from .config import ThreeGAgentConfig
 
@@ -31,32 +32,70 @@ def mask_api_key(api_key: Optional[str]) -> str:
     return clean[:6] + "..." + clean[-4:]
 
 
+def load_dotenv_if_present(env_path: Optional[Union[str, Path]] = None) -> None:
+    """Loads key-value pairs from .env file into os.environ if not already set."""
+    candidates = [
+        Path(env_path) if env_path else None,
+        Path(".env"),
+        Path("./.3g_agent/.env"),
+    ]
+    for candidate in candidates:
+        if candidate and candidate.is_file():
+            try:
+                content = candidate.read_text(encoding="utf-8")
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                        val = val[1:-1].strip()
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+                        logger.debug("Loaded %s from %s into environment", key, candidate)
+            except Exception as e:
+                logger.debug("Could not read .env file from %s: %s", candidate, e)
+
+
 def collect_api_key(
     api_key: Optional[str] = None,
     interactive_prompt: bool = True,
 ) -> Optional[str]:
-    """Collects API key from explicit argument, environment, or interactive input."""
+    """Collects API key from explicit argument, .env file, environment, or interactive input."""
+    # 0. Load .env file if available
+    load_dotenv_if_present()
+
     # 1. Explicit argument
     if api_key and api_key.strip():
-        return api_key.strip()
+        clean = api_key.strip()
+        if (clean.startswith('"') and clean.endswith('"')) or (clean.startswith("'") and clean.endswith("'")):
+            clean = clean[1:-1].strip()
+        return clean
 
     # 2. Environment variables
     for env_var in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY"):
         val = os.getenv(env_var)
         if val and val.strip():
+            clean = val.strip()
+            if (clean.startswith('"') and clean.endswith('"')) or (clean.startswith("'") and clean.endswith("'")):
+                clean = clean[1:-1].strip()
             logger.info("Found API key in environment variable: %s", env_var)
-            return val.strip()
+            return clean
 
     # 3. Interactive prompt if terminal attached
-    if interactive_prompt and sys.stdin and sys.stdin.isatty():
-        print("\n--- Client Authentication ---")
-        print("No API key detected in GEMINI_API_KEY / GOOGLE_API_KEY.")
+    if interactive_prompt and sys.stdin:
         try:
-            user_key = input("Enter your Gemini/Antigravity API Key (press Enter to skip): ").strip()
-            if user_key:
-                # Save to os.environ for child modules
-                os.environ["GEMINI_API_KEY"] = user_key
-                return user_key
+            if sys.stdin.isatty():
+                print("\n--- Client Authentication ---")
+                print("No API key detected in GEMINI_API_KEY / GOOGLE_API_KEY or .env file.")
+                user_key = input("Enter your Gemini/Antigravity API Key (press Enter to skip): ").strip()
+                if user_key:
+                    if (user_key.startswith('"') and user_key.endswith('"')) or (user_key.startswith("'") and user_key.endswith("'")):
+                        user_key = user_key[1:-1].strip()
+                    os.environ["GEMINI_API_KEY"] = user_key
+                    return user_key
         except (EOFError, KeyboardInterrupt):
             pass
 
@@ -149,14 +188,35 @@ class AgentClientInitializer:
                     "Set GEMINI_API_KEY environment variable to execute live remote queries.",
                     val_err,
                 )
-                return cls._create_fallback_client(config, warning=str(val_err), masked_key=masked_key)
+                return cls._create_fallback_client(
+                    config,
+                    warning=f"No API key provided ({val_err}). Ensure GEMINI_API_KEY is exported in your active terminal, defined in .env, or passed explicitly.",
+                    masked_key=masked_key,
+                )
+            except Exception as client_err:
+                logger.warning("Error initializing GenAI client: %s", client_err)
+                return cls._create_fallback_client(
+                    config,
+                    warning=f"Failed to initialize google.genai.Client: {client_err}",
+                    masked_key=masked_key,
+                )
 
-        except ImportError:
+        except ImportError as imp_err:
             logger.debug(
-                "google-genai package is not installed in the current environment. "
-                "Creating simulated client adapter for local testing."
+                "google-genai package is not installed in the current environment (%s): %s. "
+                "Creating simulated client adapter for local testing.",
+                sys.executable,
+                imp_err,
             )
-            return cls._create_fallback_client(config, masked_key=masked_key)
+            return cls._create_fallback_client(
+                config,
+                warning=(
+                    f"google-genai package is not installed in this Python environment ({sys.executable}).\n"
+                    f"Details: {imp_err}\n"
+                    f"Please run: {sys.executable} -m pip install -r requirements.txt"
+                ),
+                masked_key=masked_key,
+            )
 
     @classmethod
     def _create_fallback_client(
@@ -170,10 +230,13 @@ class AgentClientInitializer:
             def create(self, **kwargs: Any) -> Any:
                 raise RuntimeError(
                     f"Live API execution requires an API key or ADC credentials.\n"
-                    f"Details: {warning or 'google-genai not configured'}\n"
-                    f"Please export your API key:\n"
-                    f"  PowerShell: $env:GEMINI_API_KEY = 'your_api_key'\n"
-                    f"  Bash: export GEMINI_API_KEY='your_api_key'"
+                    f"Details: {warning or 'google-genai not configured'}\n\n"
+                    f"Resolution Options:\n"
+                    f"  1. Persistent Windows PowerShell: [System.Environment]::SetEnvironmentVariable('GEMINI_API_KEY', 'your_key', 'User')\n"
+                    f"  2. Current session PowerShell:   $env:GEMINI_API_KEY = 'your_key'\n"
+                    f"  3. Create a .env file:            Add GEMINI_API_KEY=your_key in project root\n"
+                    f"  4. Linux / macOS:                 export GEMINI_API_KEY='your_key'\n"
+                    f"  5. Verify Python Environment:     Ensure you are running the Python environment with dependencies installed ({sys.executable})"
                 )
 
             def delete(self, id: str, **kwargs: Any) -> Any:
@@ -191,10 +254,12 @@ class AgentClientInitializer:
                 self.description = kwargs.get("description", "")
                 self.system_instruction = kwargs.get("system_instruction", "")
                 self.tools = kwargs.get("tools", [])
+                self.agent_config = kwargs.get("agent_config", {})
+                self.model = self.agent_config.get("model") or kwargs.get("model") or "gemini-3.1-flash-lite"
                 self.created_at = kwargs.get("created_at", "2026-10-20T12:00:00")
 
             def __repr__(self) -> str:
-                return f"Agent(id='{self.id}', base_agent='{self.base_agent}')"
+                return f"Agent(id='{self.id}', base_agent='{self.base_agent}', model='{self.model}')"
 
         class FallbackAgentListResponse:
             def __init__(self, agents: List[Any]) -> None:
