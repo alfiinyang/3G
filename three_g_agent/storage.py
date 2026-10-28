@@ -48,6 +48,16 @@ class FileStorageManager:
         self.manifest_file = self.output_dir / "manifest.json"
         self._ensure_output_dir()
 
+    @classmethod
+    def for_design(cls, base_dir: Union[str, Path] = "./outputs") -> "FileStorageManager":
+        """Returns a FileStorageManager instance scoped to outputs/design."""
+        return cls(output_dir=Path(base_dir) / "design")
+
+    @classmethod
+    def for_build(cls, base_dir: Union[str, Path] = "./outputs") -> "FileStorageManager":
+        """Returns a FileStorageManager instance scoped to outputs/build."""
+        return cls(output_dir=Path(base_dir) / "build")
+
     def _ensure_output_dir(self) -> None:
         """Ensures the local output directory exists."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -55,6 +65,7 @@ class FileStorageManager:
     def _file_to_uri(self, path: Path) -> str:
         """Converts local Path to a clickable file:// URI format."""
         return path.resolve().as_uri()
+
 
     def save_file(
         self,

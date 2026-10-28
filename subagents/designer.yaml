@@ -1,0 +1,22 @@
+name: designer
+role: pedagogical_designer
+description: Pedagogical design, curriculum architecture, and learning specification subagent
+brain: 3.5 flash lite
+model: gemini-3.5-flash-lite
+system_instruction_file: instructions/desi_instructions.md
+skills_dir: ./skills
+skills:
+  - pedagogy-engineering
+tools:
+  allowed:
+    - file_read
+    - file_write
+    - file_create
+    - list_directory
+  disabled:
+    - code_execution
+    - run_command
+    - terminal
+output_dir: outputs/design
+lifecycle: on_demand
+environment: shared

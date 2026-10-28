@@ -10,6 +10,7 @@ Validates:
 """
 
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -18,20 +19,35 @@ from pathlib import Path
 from three_g_agent import (
     ThreeGAgent,
     ThreeGAgentConfig,
+    ThreeGAgentResponse,
     ClientParameterCollector,
     AgentClientInitializer,
     ModelInitializer,
     EnvironmentStore,
     SkillLoader,
     FileStorageManager,
+    SavedFile,
     AgentRegistry,
+
     AgentDeletionManager,
     AgentCreationSpec,
     AgentCreator,
     TurnStatusReporter,
     validate_agent_id,
     extract_interaction_text,
+    ThreeGOrchestrator,
+    DesignerSubagent,
+    BuilderSubagent,
+    SubagentConfig,
+    SubagentYamlLoader,
+    ValidationResult,
+    MODEL_ORCHESTRATOR,
+    MODEL_DESIGNER,
+    MODEL_BUILDER,
+    canonicalize_model_name,
 )
+
+
 
 
 class TestThreeGAgent(unittest.TestCase):
@@ -611,7 +627,244 @@ class DeliverableExtractorTests(unittest.TestCase):
         self.assertIn("# Plan End", content)
 
 
+class TestThreeAgentArchitecture(unittest.TestCase):
+    """Test suite validating the 3-agent architecture:
+    1. Brains (3.1 flash lite, 3.5 flash lite, 3.8 flash).
+    2. Affirmative action language & ANIR in system instructions (no 'DO NOT').
+    3. Designer subagent with skills and file access only.
+    4. Builder subagent with no system instruction and coding tools enabled.
+    5. Shared environment persistence across all 3 agents.
+    6. Lazy on-demand spinup by parent Orchestrator.
+    7. Restructured outputs into /design and /build.
+    8. Subagent YAML definitions.
+    9. Orchestrator output validation against user requests.
+    """
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="test_arch_"))
+        self.state_dir = self.temp_dir / ".3g_agent"
+        self.output_dir = self.temp_dir / "outputs"
+
+    def tearDown(self):
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_brains_and_model_properties(self):
+        """Validates model assignments: 3.1 flash lite, 3.5 flash lite, 3.8 flash."""
+        self.assertEqual(MODEL_ORCHESTRATOR, "3.1 flash lite")
+        self.assertEqual(MODEL_DESIGNER, "3.5 flash lite")
+        self.assertEqual(MODEL_BUILDER, "3.8 flash")
+
+        self.assertEqual(canonicalize_model_name("3.1 flash lite"), "gemini-3.1-flash-lite")
+        self.assertEqual(canonicalize_model_name("3.5 flash lite"), "gemini-3.5-flash-lite")
+        self.assertEqual(canonicalize_model_name("3.8 flash"), "gemini-3.8-flash")
+
+        # Config model property reading and setting
+        cfg = ThreeGAgentConfig(model="3.1 flash lite")
+        self.assertEqual(cfg.model, "3.1 flash lite")
+        self.assertEqual(cfg.agent_id, "3.1 flash lite")
+
+        cfg.model = "3.5 flash lite"
+        self.assertEqual(cfg.model, "3.5 flash lite")
+        self.assertEqual(cfg.agent_id, "3.5 flash lite")
+
+    def test_affirmative_action_language_and_anir(self):
+        """Validates that system prompts strictly avoid negative language (DO NOT) and use ANIR."""
+        forbidden_regex = re.compile(r"\b(do\s+not|don't|never|cannot|must\s+not|shall\s+not)\b", re.IGNORECASE)
+
+        instruction_files = [
+            Path("./instructions/orch_instruction.md"),
+            Path("./instructions/desi_instructions.md"),
+            Path("./desi_instructions.md"),
+        ]
+
+        for p in instruction_files:
+            self.assertTrue(p.exists(), f"Instruction file {p} must exist")
+            text = p.read_text(encoding="utf-8")
+
+            # 1. Assert zero occurrences of forbidden negative tokens
+            matches = forbidden_regex.findall(text)
+            self.assertEqual(
+                len(matches),
+                0,
+                f"File {p} contains forbidden negative language: {matches}",
+            )
+
+            # 2. Assert presence of affirmative action language
+            has_affirmative = any(
+                term in text.lower()
+                for term in ("avoid", "prevent", "decline", "confine", "differ", "needless")
+            )
+            self.assertTrue(has_affirmative, f"File {p} must use affirmative action vocabulary")
+
+            # 3. Assert ANIR structural declarative syntax
+            self.assertIn("[SYSTEM_DECLARATION]", text, f"File {p} must use ANIR blocks")
+
+    def test_subagent_yaml_definitions(self):
+        """Validates that YAML specs in subagents/ directory are well-structured and load cleanly."""
+        yaml_loader = SubagentYamlLoader()
+        specs = yaml_loader.load_all("./subagents")
+
+        self.assertIn("designer", specs)
+        self.assertIn("builder", specs)
+        self.assertIn("orchestrator", specs)
+
+        designer_spec = specs["designer"]
+        self.assertEqual(designer_spec.brain, "3.5 flash lite")
+        self.assertIn("pedagogy-engineering", designer_spec.skills)
+        self.assertIn("file_read", designer_spec.tools_allowed)
+        self.assertIn("code_execution", designer_spec.tools_disabled)
+        self.assertEqual(str(designer_spec.output_dir).replace("\\", "/"), "outputs/design")
+
+        builder_spec = specs["builder"]
+        self.assertEqual(builder_spec.brain, "3.8 flash")
+        self.assertIsNone(builder_spec.system_instruction_file)
+        self.assertEqual(len(builder_spec.skills), 0)
+        self.assertIn("code_execution", builder_spec.tools_allowed)
+        self.assertEqual(str(builder_spec.output_dir).replace("\\", "/"), "outputs/build")
+
+    def test_outputs_directory_separation(self):
+        """Validates that design outputs land in outputs/design and build outputs land in outputs/build."""
+        design_mgr = FileStorageManager.for_design(self.output_dir)
+        build_mgr = FileStorageManager.for_build(self.output_dir)
+
+        design_file = design_mgr.save_file("curriculum_spec.md", "# Pedagogical Plan")
+        build_file = build_mgr.save_file("simulator.py", "print('Running simulation')")
+
+        self.assertIn("design", str(design_file.local_path).replace("\\", "/"))
+        self.assertIn("build", str(build_file.local_path).replace("\\", "/"))
+        self.assertTrue(design_file.local_path.exists())
+        self.assertTrue(build_file.local_path.exists())
+
+    def test_designer_subagent_skills_and_tool_restrictions(self):
+        """Validates that only Designer agent gets custom skills and coding tools are disabled."""
+        store = EnvironmentStore(state_dir=self.state_dir)
+        designer = DesignerSubagent(
+            environment_store=store,
+            skills_dir="./skills",
+            instructions_file="./instructions/desi_instructions.md",
+            output_dir=self.output_dir / "design",
+            state_dir=self.state_dir,
+            brain=MODEL_DESIGNER,
+        )
+
+        self.assertEqual(designer.brain, "3.5 flash lite")
+        self.assertGreater(len(designer.skill_loader.skills), 0)
+        self.assertTrue(designer.is_tool_allowed("file_read"))
+        self.assertTrue(designer.is_tool_allowed("file_write"))
+        self.assertFalse(designer.is_tool_allowed("code_execution"))
+        self.assertFalse(designer.is_tool_allowed("terminal"))
+        self.assertFalse(designer.is_tool_allowed("run_command"))
+
+    def test_builder_subagent_has_no_instructions_and_full_tools(self):
+        """Validates that Builder subagent has no system instruction and has full coding tools."""
+        store = EnvironmentStore(state_dir=self.state_dir)
+        builder = BuilderSubagent(
+            environment_store=store,
+            output_dir=self.output_dir / "build",
+            state_dir=self.state_dir,
+            brain=MODEL_BUILDER,
+        )
+
+        self.assertEqual(builder.brain, "3.8 flash")
+        self.assertIsNone(builder.config.instructions_file)
+        self.assertIsNone(builder.config.load_instructions())
+        self.assertEqual(len(builder.skill_loader.skills), 0)
+        self.assertTrue(builder.is_tool_allowed("code_execution"))
+        self.assertTrue(builder.is_tool_allowed("run_command"))
+        self.assertTrue(builder.is_tool_allowed("file_write"))
+
+    def test_shared_environment_across_all_agents(self):
+        """Validates that all 3 agents share the exact same EnvironmentStore & environment_id."""
+        orchestrator = ThreeGOrchestrator(
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+            brain=MODEL_ORCHESTRATOR,
+        )
+
+        designer = orchestrator.get_designer_subagent()
+        builder = orchestrator.get_builder_subagent()
+
+        # Both subagents share the orchestrator's environment store
+        self.assertIs(orchestrator.environment, designer.environment)
+        self.assertIs(orchestrator.environment, builder.environment)
+
+        # Set environment ID on orchestrator
+        test_shared_id = "env_remote_sandbox_all_3_agents_999"
+        orchestrator.environment.save_environment_id(test_shared_id)
+
+        # Designer and Builder immediately see the shared environment ID
+        self.assertEqual(designer.environment.get_environment_id(), test_shared_id)
+        self.assertEqual(builder.environment.get_environment_id(), test_shared_id)
+
+    def test_lazy_subagent_spinup(self):
+        """Validates that subagents are NOT spun up initially; only on demand."""
+        orchestrator = ThreeGOrchestrator(
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+            brain=MODEL_ORCHESTRATOR,
+        )
+
+        # Initially, neither subagent is spun up
+        self.assertFalse(orchestrator.is_designer_spun_up)
+        self.assertFalse(orchestrator.is_builder_spun_up)
+
+        # When design is requested, only designer is spun up
+        orchestrator.get_designer_subagent()
+        self.assertTrue(orchestrator.is_designer_spun_up)
+        self.assertFalse(orchestrator.is_builder_spun_up)
+
+        # When build is requested, builder is spun up
+        orchestrator.get_builder_subagent()
+        self.assertTrue(orchestrator.is_builder_spun_up)
+
+    def test_orchestrator_output_validation(self):
+        """Validates that the orchestrator validates subagent outputs against user requests."""
+        orchestrator = ThreeGOrchestrator(
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+            brain=MODEL_ORCHESTRATOR,
+        )
+
+        # Case 1: Valid designer response
+        valid_desi_resp = ThreeGAgentResponse(
+            output_text="Pedagogical design with Bloom's taxonomy objectives.",
+            environment_id="env_test",
+            saved_files=[
+                SavedFile(
+                    file_name="plan.md",
+                    local_path=self.output_dir / "design" / "plan.md",
+                    file_uri="file:///outputs/design/plan.md",
+                    size_bytes=100,
+                    sha256="abc",
+                    created_at="now",
+                    source_type="direct",
+                )
+            ],
+        )
+        val_result = orchestrator.validate_output(
+            "Design a curriculum plan for milling operators",
+            valid_desi_resp,
+            "designer",
+        )
+        self.assertTrue(val_result.is_valid)
+
+        # Case 2: Designer violates policy by producing forbidden game code
+        bad_desi_resp = ThreeGAgentResponse(
+            output_text="Here is your game: import pygame; pygame.init(); def run_game(): pass",
+            environment_id="env_test",
+        )
+        val_bad = orchestrator.validate_output(
+            "Design an instructional plan",
+            bad_desi_resp,
+            "designer",
+        )
+        self.assertFalse(val_bad.is_valid)
+        self.assertIn("game simulation", " ".join(val_bad.reasons))
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

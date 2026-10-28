@@ -37,18 +37,21 @@ class AgentCreationSpec:
     
     Attributes:
         agent_id: Identifier following [name-id_num] format (e.g. "coder-12345").
-        skills_dir: Directory containing skills to pre-load into the agent.
-        instructions_file: Optional path to instructions.md holding the system prompt.
+        skills_dir: Directory containing skills to pre-load into the agent (None if no skills).
+        instructions_file: Optional path to instructions file holding the system prompt.
         description: Developer-facing description of the agent.
         base_agent: Base Antigravity coding engine ("antigravity-preview-09-2026").
+        tools: Optional list of tool definitions or restrictions.
         metadata: Arbitrary additional metadata.
     """
     agent_id: str
-    skills_dir: Union[str, Path] = "./skills"
-    instructions_file: Optional[Union[str, Path]] = "./instructions.md"
+    skills_dir: Optional[Union[str, Path]] = "./skills"
+    instructions_file: Optional[Union[str, Path]] = "./desi_instructions.md"
     description: Optional[str] = None
     base_agent: str = "antigravity-preview-09-2026"
+    tools: Optional[List[Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
 
 
 @dataclass
@@ -103,11 +106,16 @@ class AgentCreator:
         clean_id = validate_agent_id(spec.agent_id)
         logger.info("Creating new Antigravity agent on SDK API with ID: '%s'...", clean_id)
 
-        # 2. Pre-load skills
-        skills_path = Path(spec.skills_dir).resolve()
-        loader = SkillLoader(skills_path)
-        skill_names = [s.name for s in loader.skills]
-        total_stages = sum(len(s.auxiliary_files) for s in loader.skills)
+        # 2. Pre-load skills (if skills_dir provided)
+        if spec.skills_dir and Path(spec.skills_dir).exists():
+            skills_path = Path(spec.skills_dir).resolve()
+            loader = SkillLoader(skills_path)
+            skill_names = [s.name for s in loader.skills]
+            total_stages = sum(len(s.auxiliary_files) for s in loader.skills)
+        else:
+            loader = SkillLoader.empty()
+            skill_names = []
+            total_stages = 0
         logger.info(
             "Pre-loaded %d skill(s) with %d stage/auxiliary files for agent '%s'.",
             len(skill_names),
@@ -123,7 +131,12 @@ class AgentCreator:
         candidate_files = []
         if spec.instructions_file:
             candidate_files.append(Path(spec.instructions_file).resolve())
-        candidate_files.append(Path("./instructions.md").resolve())
+        candidate_files.extend([
+            Path("./instructions/desi_instructions.md").resolve(),
+            Path("./desi_instructions.md").resolve(),
+            Path("./instructions/orch_instruction.md").resolve(),
+            Path("./instructions.md").resolve(),
+        ])
 
         for instr_path in candidate_files:
             if instr_path.is_file():
@@ -147,7 +160,7 @@ class AgentCreator:
                 from .initializer import AgentClientInitializer
                 from .config import ThreeGAgentConfig
                 initialized = AgentClientInitializer.initialize(
-                    ThreeGAgentConfig(skills_dir=spec.skills_dir),
+                    ThreeGAgentConfig(skills_dir=spec.skills_dir if spec.skills_dir else None),
                     interactive_prompt=False,
                 )
                 sdk_client = cls._extract_client(initialized)
@@ -175,6 +188,9 @@ class AgentCreator:
         }
         if instructions_content:
             create_kwargs["system_instruction"] = instructions_content
+        if spec.tools is not None:
+            create_kwargs["tools"] = spec.tools
+
 
         logger.info("Calling Antigravity SDK API -> client.agents.create(id='%s')...", clean_id)
         remote_agent = sdk_client.agents.create(**create_kwargs)

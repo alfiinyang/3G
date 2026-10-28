@@ -12,6 +12,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+MODEL_ORCHESTRATOR = "3.1 flash lite"
+MODEL_DESIGNER = "3.5 flash lite"
+MODEL_BUILDER = "3.8 flash"
+
+CANONICAL_MODEL_MAP: Dict[str, str] = {
+    "3.1 flash lite": "gemini-3.1-flash-lite",
+    "3.1-flash-lite": "gemini-3.1-flash-lite",
+    "3.5 flash lite": "gemini-3.5-flash-lite",
+    "3.5-flash-lite": "gemini-3.5-flash-lite",
+    "3.8 flash": "gemini-3.8-flash",
+    "3.8-flash": "gemini-3.8-flash",
+}
+
+
+def canonicalize_model_name(name: Optional[str]) -> str:
+    """Normalizes model names (e.g. '3.1 flash lite' -> 'gemini-3.1-flash-lite')."""
+    if not name:
+        return "gemini-3.1-flash-lite"
+    clean = str(name).strip()
+    return CANONICAL_MODEL_MAP.get(clean.lower(), clean)
+
+
 def resolve_default_agent_id() -> str:
     """Resolves the default Antigravity coding agent ID, ignoring boolean environment flags."""
     env_agent = os.getenv("ANTIGRAVITY_AGENT_ID") or os.getenv("ANTIGRAVITY_MODEL")
@@ -24,19 +46,37 @@ def resolve_default_agent_id() -> str:
 
 
 def is_base_agent_id(agent_id: Optional[str]) -> bool:
-    """True if agent_id is a stock Antigravity engine (e.g. 'antigravity-preview-09-2026')
-    rather than a custom agent created via client.agents.create."""
-    return bool(agent_id) and agent_id.strip().lower().startswith("antigravity-")
+    """True if agent_id is a stock Antigravity or Gemini engine rather than custom remote agent."""
+    if not agent_id:
+        return False
+    clean = agent_id.strip().lower()
+    return (
+        clean.startswith("antigravity-")
+        or clean.startswith("gemini-")
+        or "flash" in clean
+        or "3.1" in clean
+        or "3.5" in clean
+        or "3.8" in clean
+    )
 
 
 def resolve_default_instructions_file() -> Path:
-    """Finds instructions file, using ANTIGRAVITY_INSTRUCTIONS_FILE env var or instructions.md."""
+    """Finds instructions file, searching instructions/orch_instruction.md, desi_instructions.md, etc."""
     env_file = os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE")
     if env_file:
         p = Path(env_file)
         if p.exists():
             return p
-    return Path("./instructions.md")
+    for candidate in [
+        Path("./instructions/orch_instruction.md"),
+        Path("./orch_instruction.md"),
+        Path("./instructions/desi_instructions.md"),
+        Path("./desi_instructions.md"),
+        Path("./instructions.md"),
+    ]:
+        if candidate.exists():
+            return candidate
+    return Path("./desi_instructions.md")
 
 
 @dataclass
@@ -45,10 +85,10 @@ class ThreeGAgentConfig:
     
     Attributes:
         agent_name: Name identifier of the agent (default: "3G-agent").
-        agent_id: Antigravity coding agent ID (default: "antigravity-preview-09-2026").
+        agent_id: Antigravity coding agent ID / model name.
         environment_type: Sandbox environment type ("remote" by default).
         api_key: Gemini/Google Cloud API Key (optional if using ADC or env vars).
-        skills_dir: Path to directory containing a skill or group of skills.
+        skills_dir: Path to directory containing a skill or group of skills (None if no skills needed).
         state_dir: Local directory for securely storing environment IDs and session state.
         output_dir: Local directory where created files and artifacts are stored locally.
         vertex_ai: Whether to use Vertex AI / Gemini Enterprise backend.
@@ -56,16 +96,20 @@ class ThreeGAgentConfig:
         location: Google Cloud region (e.g., "us-central1").
         max_total_tokens: Optional token limit for agent reasoning and execution.
         system_instruction_override: Optional custom system instructions.
-        instructions_file: Path to instructions.md holding system prompt.
+        instructions_file: Path to instructions file holding system prompt.
         extra_sources: Additional files or sources to mount in the remote environment.
-        model_name: Optional backwards-compatible alias for agent_id.
+        model_name: Optional backwards-compatible alias for agent_id / model.
+        model: Model / brain identifier (e.g. '3.1 flash lite', '3.5 flash lite', '3.8 flash').
+        brain: Semantic alias for model.
+        tools_allowed: Optional list of allowed tools (for tool restriction).
+        tools_disabled: Optional list of disabled tools (for tool restriction).
     """
 
     agent_name: str = "3G-agent"
     agent_id: str = field(default_factory=resolve_default_agent_id)
     environment_type: str = "remote"
     api_key: Optional[str] = None
-    skills_dir: Path = field(default_factory=lambda: Path("./skills"))
+    skills_dir: Optional[Path] = field(default_factory=lambda: Path("./skills"))
     state_dir: Path = field(default_factory=lambda: Path("./.3g_agent"))
     output_dir: Path = field(default_factory=lambda: Path("./outputs/3g_agent"))
     instructions_file: Optional[Path] = field(default_factory=resolve_default_instructions_file)
@@ -76,10 +120,23 @@ class ThreeGAgentConfig:
     system_instruction_override: Optional[str] = None
     extra_sources: List[Dict[str, Any]] = field(default_factory=list)
     model_name: Optional[str] = None
+    model: Optional[str] = None
+    brain: Optional[str] = None
+    tools_allowed: Optional[List[str]] = None
+    tools_disabled: Optional[List[str]] = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name in ("model", "brain", "model_name") and value is not None:
+            super().__setattr__("agent_id", str(value))
+        elif name == "agent_id" and value is not None:
+            super().__setattr__("model", str(value))
+            super().__setattr__("brain", str(value))
+            super().__setattr__("model_name", str(value))
 
     def __post_init__(self) -> None:
         """Convert string paths to Path objects and normalize defaults."""
-        if isinstance(self.skills_dir, str):
+        if self.skills_dir is not None and isinstance(self.skills_dir, str):
             self.skills_dir = Path(self.skills_dir)
         if isinstance(self.state_dir, str):
             self.state_dir = Path(self.state_dir)
@@ -88,14 +145,17 @@ class ThreeGAgentConfig:
         if isinstance(self.instructions_file, str):
             self.instructions_file = Path(self.instructions_file)
 
-        # Harmonize agent_id and model_name alias
-        if self.model_name and self.model_name.strip():
-            clean_model = self.model_name.strip()
+        # Harmonize agent_id, model, model_name, and brain
+        chosen_model = self.model or self.brain or self.model_name
+        if chosen_model and chosen_model.strip():
+            clean_model = chosen_model.strip()
             if clean_model.lower() not in ("1", "0", "true", "false", "yes", "no"):
                 self.agent_id = clean_model
         if not self.agent_id or self.agent_id.strip() in ("1", "0", "true", "false", "yes", "no"):
             self.agent_id = resolve_default_agent_id()
         self.model_name = self.agent_id
+        self.model = self.agent_id
+        self.brain = self.agent_id
 
         # Resolve API Key from environment if not explicitly passed
         if not self.api_key:
@@ -113,19 +173,20 @@ class ThreeGAgentConfig:
             self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
     def load_instructions(self) -> Optional[str]:
-        """Loads system instructions from override or instructions file (instructions.md)."""
+        """Loads system instructions from override or instructions file."""
         if self.system_instruction_override and self.system_instruction_override.strip():
             return self.system_instruction_override.strip()
 
-        target_file = self.instructions_file if self.instructions_file is not None else resolve_default_instructions_file()
-        if target_file and target_file.is_file():
+        if self.instructions_file and self.instructions_file.is_file():
             try:
-                content = target_file.read_text(encoding="utf-8").strip()
+                content = self.instructions_file.read_text(encoding="utf-8").strip()
                 if content:
                     return content
             except Exception:
                 pass
         return None
+
+
 
 
 class ClientParameterCollector:
@@ -163,11 +224,12 @@ class ClientParameterCollector:
     def from_dict(cls, data: Dict[str, Any]) -> ThreeGAgentConfig:
         """Constructs and validates configuration from a dictionary."""
         config_data = dict(data)
-        # Handle backwards-compatible model_name key
-        if "model_name" in config_data and "agent_id" not in config_data:
-            val = config_data.pop("model_name")
-            if val and str(val).lower() not in ("1", "0", "true", "false"):
-                config_data["agent_id"] = val
+        # Handle model, brain, and backwards-compatible model_name key
+        for key in ("model", "brain", "model_name"):
+            if key in config_data and "agent_id" not in config_data:
+                val = config_data.pop(key)
+                if val and str(val).lower() not in ("1", "0", "true", "false"):
+                    config_data["agent_id"] = val
         # Ensure environment_type defaults to remote if not explicitly provided
         config_data.setdefault("environment_type", "remote")
         config_data.setdefault("agent_name", "3G-agent")
@@ -186,7 +248,7 @@ class ClientParameterCollector:
             # Per requirement: Environment MUST be remote
             errors.append(f"environment_type must be 'remote', got '{config.environment_type}'")
 
-        if require_skills_dir and not config.skills_dir.exists():
+        if require_skills_dir and config.skills_dir is not None and not config.skills_dir.exists():
             errors.append(f"Specified skills directory does not exist: {config.skills_dir.resolve()}")
 
         if not config.api_key and not config.vertex_ai:
@@ -197,3 +259,4 @@ class ClientParameterCollector:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
 
         return errors
+

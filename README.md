@@ -30,42 +30,83 @@
 
 ---
 
-## Architecture Overview
+## Multi-Agent Architecture (Orchestrator / Designer / Builder)
+
+`3G-agent` implements a decoupled multi-agent architecture with strict responsibilities:
+
+1. **Parent Orchestrator Agent**:
+   - **Brain (`agent_config.model`)**: `3.1 flash lite` (`gemini-3.1-flash-lite`).
+   - **Lifecycle**: Created with the current process.
+   - **Interface**: Sole user-facing facade; subagents remain internal.
+   - **System Prompt**: Loaded from common directory (`instructions/orch_instruction.md`) using ANIR and affirmative action language.
+   - **Role**: Ingests user requests, classifies intent, delegates tasks to subagents on demand, and validates outputs before presenting deliverables to user.
+
+2. **Designer Subagent**:
+   - **Brain (`agent_config.model`)**: `3.5 flash lite` (`gemini-3.5-flash-lite`).
+   - **Lifecycle**: Spun up on-demand only when educational / pedagogical design is requested.
+   - **Skills**: Preloaded with skills from `./skills` directory (`pedagogy-engineering`). Only the designer agent needs these custom skills.
+   - **System Prompt**: Preloaded with `instructions/desi_instructions.md` (renamed from `instructions.md`) in ANIR with affirmative action language.
+   - **Tool Constraints**: Confined strictly to file access tools (create, read, write, list); coding execution tools are disabled.
+   - **Target Output Directory**: Deliverables saved strictly to `./outputs/design/`.
+
+3. **Builder Subagent**:
+   - **Brain (`agent_config.model`)**: `3.8 flash` (`gemini-3.8-flash`).
+   - **Lifecycle**: Spun up on-demand only when it is time to build / implement.
+   - **Skills**: None (custom skills unnecessary).
+   - **System Prompt**: None (no specific system instruction).
+   - **Tool Constraints**: Full coding and execution tools enabled.
+   - **Target Output Directory**: Deliverables saved strictly to `./outputs/build/`.
+
+4. **Shared Environment**:
+   - All 3 agents share the exact same remote sandbox execution container (`environment_id`), maintaining context, files, and state across turns and across agent delegations.
+
+5. **Affirmative Action Language & ANIR**:
+   - System prompts strictly avoid negative phrasing (zero "DO NOT" / "DON'T" / "NEVER" commands) and employ affirmative action language (avoid, prevent, decline, confine, defer).
+   - Prompts use Agent-Native Intermediate Representation (ANIR) with structured declarative blocks to prevent instruction bloating.
+
+6. **Declarative Subagent YAML Definitions**:
+   - Subagent specifications are placed in the `subagents/` directory (`designer.yaml`, `builder.yaml`, `orchestrator.yaml`).
+
+---
+
+## Architecture Diagram
 
 ```
-                      +------------------------------+
-                      | ClientParameterCollector     |
-                      | (Environment / CLI / Dict)   |
-                      +--------------+---------------+
-                                     |
-                                     v
-                      +------------------------------+
-                      |     ThreeGAgentConfig        |
-                      +--------------+---------------+
-                                     |
-               +---------------------+---------------------+
-               |                     |                     |
-               v                     v                     v
-     +-------------------+ +-------------------+ +-------------------+
-     | ModelInitializer  | |    SkillLoader    | | EnvironmentStore  |
-     | (Authentication & | | (Ingests folder   | | (Securely stores  |
-     |  Client Setup)    | |  & builds sources)| |  environment_id)  |
-     +---------+---------+ +---------+---------+ +---------+---------+
-               |                     |                     |
-               +---------------------+---------------------+
-                                     |
-                                     v
-                        +-------------------------+
-                        |       ThreeGAgent       |
-                        |   (Main Execution Core) |
-                        +------------+------------+
-                                     |
-                                     v
-                        +-------------------------+
-                        |   FileStorageManager    |
-                        |  (Local File Downloads  |
-                        |   & URI Accessibility)  |
-                        +-------------------------+
+                        +---------------------------+
+                        |        USER REQUEST       |
+                        +-------------+-------------+
+                                      |
+                                      v
+                        +---------------------------+
+                        |    Parent Orchestrator    |
+                        |   (Brain: 3.1 flash lite) |
+                        | [orch_instruction in ANIR]|
+                        +------+-------------+------+
+                               |             |
+                 +-------------+             +-------------+
+                 | (on demand)                             | (on demand)
+                 v                                         v
+   +---------------------------+             +---------------------------+
+   |     Designer Subagent     |             |      Builder Subagent     |
+   |   (Brain: 3.5 flash lite) |             |    (Brain: 3.8 flash)     |
+   | - Skills: ./skills        |             | - Skills: None            |
+   | - Prompt: desi_instruct.. |             | - Prompt: None            |
+   | - Tools: File access only |             | - Tools: Full coding tools|
+   +-------------+-------------+             +-------------+-------------+
+                 |                                         |
+                 v                                         v
+   +---------------------------+             +---------------------------+
+   |   /outputs/design/        |             |   /outputs/build/         |
+   | (Pedagogical specs/plans) |             | (Executable code/scripts) |
+   +-------------+-------------+             +-------------+-------------+
+                 \                                         /
+                  +-------------------+-------------------+
+                                      | (Shared environment_id)
+                                      v
+                        +---------------------------+
+                        |   Shared Remote Sandbox   |
+                        |  (Cloud Container State)  |
+                        +---------------------------+
 ```
 
 ---
@@ -73,20 +114,34 @@
 ## Directory Structure
 
 ```text
+├── instructions/
+│   ├── orch_instruction.md   # Orchestrator system prompt (ANIR, affirmative action)
+│   └── desi_instructions.md   # Designer system prompt (ANIR, affirmative action)
+├── subagents/
+│   ├── designer.yaml         # Designer subagent YAML definition
+│   ├── builder.yaml          # Builder subagent YAML definition
+│   └── orchestrator.yaml     # Orchestrator YAML definition
+├── outputs/
+│   ├── design/               # Designer agent deliverables (.md curricula, rubrics)
+│   └── build/                # Builder agent deliverables (.py scripts, code)
+├── skills/
+│   └── pedagogy-engineering/ # Custom pedagogy engineering skills
 ├── three_g_agent/
-│   ├── __init__.py           # Package exports and versioning
-│   ├── config.py             # Client parameter collection & configuration schema
-│   ├── initializer.py        # Strict model/client initialization factory
+│   ├── orchestrator.py       # Parent Orchestrator agent & validation engine
+│   ├── subagents.py          # Designer & Builder subagents and YAML loader
+│   ├── config.py             # Configuration schema, model mappings & parameters
+│   ├── agent.py              # Antigravity agent execution core
 │   ├── environment.py        # Secure remote Environment ID store & lifecycle
 │   ├── skills.py             # Skill discovery, YAML parsing, and remote mounting
-│   ├── storage.py            # Local file accessibility, artifact extraction & manifest
-│   ├── agent.py              # Main 3G-agent operational execution engine
+│   ├── storage.py            # Local file accessibility & manifest manager
+│   ├── initializer.py        # Strict model/client initialization factory
 │   └── cli.py                # Command-line interface
 ├── run_3g_agent.py           # Demonstration script
 ├── test_three_g_agent.py     # Comprehensive automated test suite
 ├── requirements.txt          # Python package dependencies
-└── README.md                 # Documentation
+└── README.md                 # Project documentation
 ```
+
 
 ---
 

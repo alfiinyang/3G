@@ -1,0 +1,21 @@
+name: builder
+role: code_builder
+description: Software implementation, code construction, and executable building subagent
+brain: 3.8 flash
+model: gemini-3.8-flash
+system_instruction_file: null # builder subagent has no specific system instruction
+skills_dir: null
+skills: []
+tools:
+  allowed:
+    - file_read
+    - file_write
+    - file_create
+    - list_directory
+    - code_execution
+    - run_command
+    - terminal
+  disabled: []
+output_dir: outputs/build
+lifecycle: on_demand
+environment: shared
