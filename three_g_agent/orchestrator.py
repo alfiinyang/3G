@@ -82,6 +82,7 @@ class ThreeGOrchestrator:
 
     def __init__(
         self,
+        agent_id: Optional[str] = None,
         config: Optional[ThreeGAgentConfig] = None,
         client_handle: Optional[InitializedClient] = None,
         skills_dir: Union[str, Path] = "./skills",
@@ -97,6 +98,10 @@ class ThreeGOrchestrator:
         self.state_dir = Path(state_dir)
         self.subagents_dir = Path(subagents_dir)
 
+        from .config import resolve_default_agent_id
+        resolved_agent_id = agent_id or (config.agent_id if config else None) or resolve_default_agent_id()
+        self.agent_id = resolved_agent_id
+
         # Common instructions resolution (strictly within /instructions directory)
         self.instructions_file = Path(instructions_file) if instructions_file else None
         if self.instructions_file and not self.instructions_file.exists():
@@ -104,11 +109,10 @@ class ThreeGOrchestrator:
             if alt.exists():
                 self.instructions_file = alt
 
-
-        # Orchestrator Configuration: brain = 3.1 flash lite
+        # Orchestrator Configuration: brain = 3.1 flash lite, agent_id = custom ID
         self.config = config or ThreeGAgentConfig(
             agent_name="3G-orchestrator",
-            agent_id=canonicalize_model_name(brain),
+            agent_id=self.agent_id,
             model=brain,
             brain=brain,
             skills_dir=None,  # Only designer agent needs custom skills
@@ -158,13 +162,15 @@ class ThreeGOrchestrator:
     def get_designer_subagent(self) -> DesignerSubagent:
         """Spins up the Designer Subagent strictly when educational design is needed."""
         if self._designer_subagent is None:
-            logger.info("Spinting up Designer Subagent on demand (brain: %s)...", MODEL_DESIGNER)
+            logger.info("Spinning up Designer Subagent on demand (brain: %s)...", MODEL_DESIGNER)
             desi_yaml = self._subagent_yaml_specs.get("designer")
             instr_file = desi_yaml.system_instruction_file if desi_yaml else Path("./instructions/desi_instructions.md")
             skills_dir = desi_yaml.skills_dir if desi_yaml and desi_yaml.skills_dir else self.skills_dir
             out_dir = desi_yaml.output_dir if desi_yaml else self.output_dir / "design"
 
+            designer_agent_id = f"{self.agent_id}-designer"
             self._designer_subagent = DesignerSubagent(
+                agent_id=designer_agent_id,
                 environment_store=self.environment,  # Shared environment
                 client_handle=self.client_handle,
                 skills_dir=skills_dir,
@@ -182,7 +188,9 @@ class ThreeGOrchestrator:
             build_yaml = self._subagent_yaml_specs.get("builder")
             out_dir = build_yaml.output_dir if build_yaml else self.output_dir / "build"
 
+            builder_agent_id = f"{self.agent_id}-builder"
             self._builder_subagent = BuilderSubagent(
+                agent_id=builder_agent_id,
                 environment_store=self.environment,  # Shared environment
                 client_handle=self.client_handle,
                 output_dir=out_dir,

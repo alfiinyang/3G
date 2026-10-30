@@ -16,7 +16,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from .config import ClientParameterCollector, ThreeGAgentConfig
+from .config import (
+    ClientParameterCollector,
+    ThreeGAgentConfig,
+    canonicalize_model_name,
+    is_base_agent_id,
+)
 from .deletion import AgentDeletionManager, DeletionResult
 from .environment import EnvironmentStore
 from .initializer import InitializedClient, ModelInitializer
@@ -196,8 +201,8 @@ class ThreeGAgent:
         4. Environment Store: Prepares secure remote environment tracking.
         5. Storage Manager: Prepares local file accessibility infrastructure.
         """
-        # Resolve target agent (not model)
-        target_agent = agent_id or model_name
+        # Resolve target custom agent ID (the ID the user gave it)
+        target_agent = agent_id
         if not target_agent or target_agent.strip() in ("1", "0", "true", "false", "yes", "no"):
             from .config import resolve_default_agent_id
             target_agent = resolve_default_agent_id()
@@ -209,6 +214,8 @@ class ThreeGAgent:
         config = ThreeGAgentConfig(
             agent_name="3G-agent",
             agent_id=target_agent,
+            model=model_name,
+            brain=model_name,
             environment_type="remote",  # Mandatory: remote environment
             api_key=api_key,
             skills_dir=Path(skills_dir) if skills_dir else None,
@@ -220,11 +227,9 @@ class ThreeGAgent:
             location=location,
             system_instruction_override=system_instruction_override,
         )
-        # Existing custom agents (created via client.agents.create) already hold their
-        # skills + instructions in their remote base_environment: never reload locally.
-        from .config import is_base_agent_id
         if load_local_context is None:
-            load_local_context = is_base_agent_id(target_agent)
+            # Custom agents created via client.agents.create hold skills/instructions remotely
+            load_local_context = bool(skills_dir)
 
         ClientParameterCollector.validate(config, require_skills_dir=load_local_context and config.skills_dir is not None)
 
@@ -343,7 +348,9 @@ class ThreeGAgent:
         if context_prefixes:
             full_input = "\n\n".join(context_prefixes) + f"\n\n{prompt}"
 
-        # 4. Execute interaction via client using Antigravity coding agent
+        # 4. Execute interaction via client using the custom agent ID the user gave it
+        # Note: During interactions, 'agent' is strictly the custom agent ID.
+        # 'agent_config' is NEVER passed in interactions (configured during client.agents.create).
         interaction_kwargs: Dict[str, Any] = {
             "agent": self.config.agent_id,
             "input": full_input,
@@ -398,15 +405,28 @@ class ThreeGAgent:
 
         except Exception as api_err:
             err_msg = str(api_err)
-            # If 404 occurs because a previously persisted environment ID has expired on Google's servers:
-            if ("404" in err_msg or "not found" in err_msg.lower() or "not_found" in err_msg.lower()) and isinstance(env_payload, str):
-                reporter.environment("Sandbox expired. Provisioning fresh container...")
-                logger.info(
-                    "Remote container Environment ID '%s' not found (expired). "
-                    "Resetting local state and provisioning a fresh remote sandbox...",
-                    env_payload,
+            is_404 = "404" in err_msg or "not found" in err_msg.lower() or "not_found" in err_msg.lower()
+            had_prev_interaction = "previous_interaction_id" in interaction_kwargs
+            had_held_env = isinstance(interaction_kwargs.get("environment"), str)
+
+            # If 404 occurs because of an expired interaction ID or expired sandbox container:
+            if is_404 and (had_prev_interaction or had_held_env):
+                logger.warning(
+                    "404 Not Found from Antigravity API (previous_interaction_id: %s, env: %s). "
+                    "Resetting session and environment state to retry with fresh container...",
+                    self.last_interaction_id,
+                    interaction_kwargs.get("environment"),
                 )
+                reporter.environment("Session/sandbox expired on server. Refreshing container...")
+                self.last_interaction_id = None
                 self.environment.reset_environment()
+                if self.active_session_id:
+                    self.registry.update_conversation_session(
+                        agent_id=self.config.agent_id,
+                        session_id=self.active_session_id,
+                        environment_id="env_reset",
+                        last_interaction_id=None,
+                    )
                 fresh_env_payload = self.environment.build_environment_payload(
                     sources=remote_sources,
                     force_fresh=True,
@@ -415,10 +435,27 @@ class ThreeGAgent:
                 interaction_kwargs["environment"] = (
                     fresh_env_payload if fresh_env_payload is not None else {"type": "remote"}
                 )
-                if "previous_interaction_id" in interaction_kwargs:
-                    del interaction_kwargs["previous_interaction_id"]
-                reporter.thinking("Awaiting Antigravity response in fresh container...")
-                interaction = self.client.interactions.create(**interaction_kwargs)
+                interaction_kwargs.pop("previous_interaction_id", None)
+
+                reporter.thinking("Retrying request in fresh container...")
+                try:
+                    interaction = self.client.interactions.create(**interaction_kwargs)
+                except Exception as retry_err:
+                    reporter.stop("Execution failed")
+                    if "404" in str(retry_err) or "not_found" in str(retry_err).lower():
+                        raise RuntimeError(
+                            f"Agent '{interaction_kwargs.get('agent', self.config.agent_id)}' was not found on Antigravity API (404).\n"
+                            f"Details: {retry_err}\n"
+                            f"The remote agent definition may not exist or has expired. Please run the CLI to create a new agent (Option 1) or specify a valid agent ID."
+                        ) from retry_err
+                    raise
+            elif is_404:
+                reporter.stop("Execution failed")
+                raise RuntimeError(
+                    f"Agent '{interaction_kwargs.get('agent', self.config.agent_id)}' was not found on Antigravity API (404).\n"
+                    f"Details: {api_err}\n"
+                    f"The remote agent definition may not exist or has expired. Please run the CLI to create a new agent (Option 1) or specify a valid agent ID."
+                ) from api_err
             else:
                 reporter.stop("Execution failed")
                 raise

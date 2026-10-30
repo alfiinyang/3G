@@ -76,21 +76,16 @@ class TestThreeGAgent(unittest.TestCase):
         """Test that agent_id defaults to Antigravity coding agent and rejects boolean flags."""
         from three_g_agent.config import resolve_default_agent_id
 
-        # Default resolution
-        self.assertEqual(resolve_default_agent_id(), "antigravity-preview-09-2026")
+        # Default resolution: user-defined custom agent ID format
+        self.assertEqual(resolve_default_agent_id(), "orch-001")
 
-        # Config properly sets agent_id
+        # Config properly sets custom agent_id
         config = ThreeGAgentConfig(skills_dir=Path("./skills"))
-        self.assertEqual(config.agent_id, "antigravity-preview-09-2026")
-        self.assertEqual(config.model_name, "antigravity-preview-09-2026")
+        self.assertEqual(config.agent_id, "orch-001")
 
-        # Rejection of boolean flag '1' when passed as model_name or agent_id
-        config_with_flag = ThreeGAgentConfig(skills_dir=Path("./skills"), model_name="1")
-        self.assertEqual(config_with_flag.agent_id, "antigravity-preview-09-2026")
-
-        # Acceptance of explicit custom agent ID
-        custom_config = ThreeGAgentConfig(skills_dir=Path("./skills"), agent_id="custom-coding-agent")
-        self.assertEqual(custom_config.agent_id, "custom-coding-agent")
+        # Acceptance of explicit custom agent ID (the ID the user gave it)
+        custom_config = ThreeGAgentConfig(skills_dir=Path("./skills"), agent_id="coder-12345")
+        self.assertEqual(custom_config.agent_id, "coder-12345")
 
         # Test failure if environment is not remote
         invalid_config = ThreeGAgentConfig(
@@ -332,17 +327,21 @@ End of document.
             load_local_context=False,
         )
 
-        # Turn 1: Fresh environment must be passed as {"type": "remote"}
+        # Turn 1: Fresh environment must be passed as {"type": "remote"} and agent is custom ID without agent_config
         resp1 = agent.execute("First message to created orchestrator agent")
         self.assertEqual(len(captured_calls), 1)
+        self.assertEqual(captured_calls[0]["agent"], "coder-55555")
+        self.assertNotIn("agent_config", captured_calls[0])
         self.assertIn("environment", captured_calls[0])
         self.assertEqual(captured_calls[0]["environment"], {"type": "remote"})
         self.assertEqual(resp1.environment_id, "env_sandbox_custom_999")
         self.assertEqual(agent.get_environment_id(), "env_sandbox_custom_999")
 
-        # Turn 2: Held environment ID must be passed directly as string
+        # Turn 2: Held environment ID must be passed directly as string and agent remains custom ID
         resp2 = agent.execute("Second message to created orchestrator agent")
         self.assertEqual(len(captured_calls), 2)
+        self.assertEqual(captured_calls[1]["agent"], "coder-55555")
+        self.assertNotIn("agent_config", captured_calls[1])
         self.assertIn("environment", captured_calls[1])
         self.assertEqual(captured_calls[1]["environment"], "env_sandbox_custom_999")
         self.assertEqual(captured_calls[1].get("previous_interaction_id"), "inter_custom_001")
@@ -760,14 +759,14 @@ class TestThreeAgentArchitecture(unittest.TestCase):
         self.assertEqual(canonicalize_model_name("3.5 flash lite"), "gemini-3.5-flash-lite")
         self.assertEqual(canonicalize_model_name("3.8 flash"), "gemini-3.8-flash")
 
-        # Config model property reading and setting
-        cfg = ThreeGAgentConfig(model="3.1 flash lite")
+        # Config model property reading and setting without overwriting custom agent_id
+        cfg = ThreeGAgentConfig(agent_id="orch-001", model="3.1 flash lite")
         self.assertEqual(cfg.model, "3.1 flash lite")
-        self.assertEqual(cfg.agent_id, "3.1 flash lite")
+        self.assertEqual(cfg.agent_id, "orch-001")
 
         cfg.model = "3.5 flash lite"
         self.assertEqual(cfg.model, "3.5 flash lite")
-        self.assertEqual(cfg.agent_id, "3.5 flash lite")
+        self.assertEqual(cfg.agent_id, "orch-001")
 
     def test_affirmative_action_language_and_anir(self):
         """Validates that system prompts strictly avoid negative language (DO NOT) and use ANIR."""
@@ -966,6 +965,67 @@ class TestThreeAgentArchitecture(unittest.TestCase):
         )
         self.assertFalse(val_bad.is_valid)
         self.assertIn("game simulation", " ".join(val_bad.reasons))
+
+    def test_agent_id_strict_custom_name_and_no_agent_config_during_interactions(self):
+        """Validates that:
+        1. agent_id is the custom ID given by the user, never the model name or base engine.
+        2. client.interactions.create is called using agent=custom_agent_id.
+        3. client.interactions.create NEVER passes agent_config.
+        4. agent_config is passed during client.agents.create().
+        """
+        captured_interactions = []
+
+        class MockInteractionResult:
+            def __init__(self, agent_arg, env_arg):
+                self.output_text = f"Response from {agent_arg}"
+                self.environment_id = env_arg if isinstance(env_arg, str) else "env_mock_999"
+
+        class MockInteractions:
+            def create(self, **kwargs):
+                captured_interactions.append(kwargs)
+                return MockInteractionResult(kwargs.get("agent"), kwargs.get("environment"))
+
+        class MockClient:
+            def __init__(self):
+                self.interactions = MockInteractions()
+
+        custom_user_id = "pedagogy-9999"
+        config = ThreeGAgentConfig(
+            agent_id=custom_user_id,
+            model="3.1 flash lite",
+            state_dir=self.state_dir,
+            output_dir=self.output_dir,
+        )
+        self.assertEqual(config.agent_id, custom_user_id)
+        self.assertEqual(config.model, "3.1 flash lite")
+
+        init_client = AgentClientInitializer._create_fallback_client(config)
+        init_client.client = MockClient()
+
+        agent = ThreeGAgent(
+            config=config,
+            initialized_client=init_client,
+            skill_loader=SkillLoader.empty(),
+            environment_store=EnvironmentStore(state_dir=self.state_dir),
+            storage_manager=FileStorageManager(output_dir=self.output_dir),
+            load_local_context=False,
+        )
+
+        resp = agent.execute("Analyze this custom curriculum.")
+        self.assertEqual(len(captured_interactions), 1)
+        call_kwargs = captured_interactions[0]
+
+        # 1. agent must be the custom ID the user gave it
+        self.assertEqual(call_kwargs["agent"], custom_user_id)
+        self.assertNotEqual(call_kwargs["agent"], "antigravity-preview-09-2026")
+        self.assertNotEqual(call_kwargs["agent"], "3.1 flash lite")
+        self.assertNotEqual(call_kwargs["agent"], "gemini-3.1-flash-lite")
+
+        # 2. agent_config must NOT be passed in interactions.create
+        self.assertNotIn("agent_config", call_kwargs)
+
+        # 3. environment is passed
+        self.assertIn("environment", call_kwargs)
 
 
 if __name__ == "__main__":

@@ -290,6 +290,32 @@ class AgentCreator:
             return None
 
     @classmethod
+    def ensure_agent(
+        cls,
+        spec: AgentCreationSpec,
+        client_handle: Optional[Any] = None,
+    ) -> AgentCreationResult:
+        """Ensures an agent exists on the SDK API with its agent_config and model bound.
+        
+        If the agent already exists on the SDK API, retrieves it.
+        If not, invokes client.agents.create to register it.
+        """
+        existing = cls.get_agent(spec.agent_id, client_handle=client_handle)
+        if existing is not None:
+            resolved_model = canonicalize_model_name(spec.model or MODEL_ORCHESTRATOR)
+            return AgentCreationResult(
+                agent_id=validate_agent_id(spec.agent_id),
+                skills_count=0,
+                stages_count=0,
+                has_instructions=bool(spec.instructions_file),
+                instructions_length=0,
+                remote_agent=existing,
+                model=resolved_model,
+                agent_config=spec.agent_config or {"model": resolved_model},
+            )
+        return cls.create_agent(spec=spec, client_handle=client_handle)
+
+    @classmethod
     def describe_agent_capabilities(cls, agent_id: str, client_handle: Optional[Any] = None) -> Dict[str, Any]:
         """Fetches an agent from the SDK API and extracts its custom skills and tools.
 

@@ -514,9 +514,7 @@ def main() -> int:
             chosen_agent_id = validate_agent_id(cli_specified_agent)
         except ValueError:
             chosen_agent_id = cli_specified_agent.strip()
-        from .config import is_base_agent_id
-        if not is_base_agent_id(chosen_agent_id):
-            AgentCreator.display_agent_capabilities(chosen_agent_id, initialized_client)
+        AgentCreator.display_agent_capabilities(chosen_agent_id, initialized_client)
 
     if not chosen_agent_id and is_interactive:
         while True:
