@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from .config import MODEL_ORCHESTRATOR, canonicalize_model_name
 from .initializer import InitializedClient
 from .registry import validate_agent_id
 from .skills import SkillLoader
@@ -42,22 +41,16 @@ class AgentCreationSpec:
         instructions_file: Optional path to instructions file holding the system prompt.
         description: Developer-facing description of the agent.
         base_agent: Base Antigravity coding engine ("antigravity-preview-09-2026").
-        model: Brain / model name for the agent (defaults to MODEL_ORCHESTRATOR = "3.1 flash lite").
-        agent_config: Explicit configuration dictionary specifying model (e.g. {"model": "gemini-3.1-flash-lite"}).
         tools: Optional list of tool definitions or restrictions.
         metadata: Arbitrary additional metadata.
     """
     agent_id: str
-    skills_dir: Optional[Union[str, Path]] = None  # Orchestrator does not need any special skills
-    instructions_file: Optional[Union[str, Path]] = "./instructions/orch_instruction.md"
+    skills_dir: Optional[Union[str, Path]] = "./skills"
+    instructions_file: Optional[Union[str, Path]] = "./desi_instructions.md"
     description: Optional[str] = None
     base_agent: str = "antigravity-preview-09-2026"
-    model: str = MODEL_ORCHESTRATOR
-    agent_config: Optional[Dict[str, Any]] = None
     tools: Optional[List[Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-
 
 
 
@@ -70,8 +63,6 @@ class AgentCreationResult:
     has_instructions: bool
     instructions_length: int
     remote_agent: Any = None
-    model: Optional[str] = None
-    agent_config: Optional[Dict[str, Any]] = None
     warning: Optional[str] = None
 
 
@@ -142,9 +133,10 @@ class AgentCreator:
             candidate_files.append(Path(spec.instructions_file).resolve())
         candidate_files.extend([
             Path("./instructions/desi_instructions.md").resolve(),
+            Path("./desi_instructions.md").resolve(),
             Path("./instructions/orch_instruction.md").resolve(),
+            Path("./instructions.md").resolve(),
         ])
-
 
         for instr_path in candidate_files:
             if instr_path.is_file():
@@ -159,13 +151,7 @@ class AgentCreator:
                 except Exception as read_err:
                     logger.warning("Could not read instructions file %s: %s", instr_path, read_err)
 
-        description = spec.description or (
-            f"3G Agent pre-loaded with skills: {', '.join(skill_names)}"
-            if skill_names
-            else "Antigravity Orchestrator Agent"
-        )
-
-
+        description = spec.description or f"Antigravity Agent pre-loaded with skills: {', '.join(skill_names) or 'none'}"
 
         # 4. Invoke Antigravity SDK API directly (no local file saving)
         sdk_client = cls._extract_client(client_handle)
@@ -194,17 +180,10 @@ class AgentCreator:
             for target in (".agents/instructions.md", ".agents/AGENTS.md"):
                 base_sources.append({"type": "inline", "target": target, "content": instructions_content})
 
-        # 4. Resolve agent_config (brain = 3.1 flash lite for orchestrator)
-        resolved_model = canonicalize_model_name(spec.model or MODEL_ORCHESTRATOR)
-        agent_config_payload = dict(spec.agent_config or {})
-        if "model" not in agent_config_payload:
-            agent_config_payload["model"] = resolved_model
-
         create_kwargs: Dict[str, Any] = {
             "id": clean_id,
             "base_agent": spec.base_agent,
             "description": description,
-            "agent_config": agent_config_payload,
             "base_environment": {"type": "remote", "sources": base_sources},
         }
         if instructions_content:
@@ -212,7 +191,8 @@ class AgentCreator:
         if spec.tools is not None:
             create_kwargs["tools"] = spec.tools
 
-        logger.info("Calling Antigravity SDK API -> client.agents.create(id='%s', agent_config=%s)...", clean_id, agent_config_payload)
+
+        logger.info("Calling Antigravity SDK API -> client.agents.create(id='%s')...", clean_id)
         remote_agent = sdk_client.agents.create(**create_kwargs)
         logger.info("Agent '%s' successfully created on Antigravity SDK API.", clean_id)
 
@@ -223,8 +203,6 @@ class AgentCreator:
             has_instructions=has_instructions,
             instructions_length=instructions_length,
             remote_agent=remote_agent,
-            model=resolved_model,
-            agent_config=agent_config_payload,
             warning=None,
         )
 
@@ -288,32 +266,6 @@ class AgentCreator:
         except Exception as err:
             logger.debug("Antigravity SDK API client.agents.get('%s') error: %s", clean_id, err)
             return None
-
-    @classmethod
-    def ensure_agent(
-        cls,
-        spec: AgentCreationSpec,
-        client_handle: Optional[Any] = None,
-    ) -> AgentCreationResult:
-        """Ensures an agent exists on the SDK API with its agent_config and model bound.
-        
-        If the agent already exists on the SDK API, retrieves it.
-        If not, invokes client.agents.create to register it.
-        """
-        existing = cls.get_agent(spec.agent_id, client_handle=client_handle)
-        if existing is not None:
-            resolved_model = canonicalize_model_name(spec.model or MODEL_ORCHESTRATOR)
-            return AgentCreationResult(
-                agent_id=validate_agent_id(spec.agent_id),
-                skills_count=0,
-                stages_count=0,
-                has_instructions=bool(spec.instructions_file),
-                instructions_length=0,
-                remote_agent=existing,
-                model=resolved_model,
-                agent_config=spec.agent_config or {"model": resolved_model},
-            )
-        return cls.create_agent(spec=spec, client_handle=client_handle)
 
     @classmethod
     def describe_agent_capabilities(cls, agent_id: str, client_handle: Optional[Any] = None) -> Dict[str, Any]:

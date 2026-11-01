@@ -203,7 +203,6 @@ class DesignerSubagent:
     def __init__(
         self,
         environment_store: EnvironmentStore,
-        agent_id: Optional[str] = None,
         client_handle: Optional[InitializedClient] = None,
         skills_dir: Union[str, Path] = "./skills",
         instructions_file: Union[str, Path, None] = "./instructions/desi_instructions.md",
@@ -212,26 +211,26 @@ class DesignerSubagent:
         brain: str = MODEL_DESIGNER,
     ) -> None:
         self.brain = brain
-        self.agent_id = agent_id or "desi-001"
         self.skills_dir = Path(skills_dir)
         self.instructions_file = Path(instructions_file) if instructions_file else None
         self.output_dir = Path(output_dir)
         self.environment = environment_store
         self.state_dir = Path(state_dir)
 
-        # Confirm instructions file exists strictly within /instructions
+        # Confirm instructions file exists or find fallback
         if self.instructions_file and not self.instructions_file.exists():
-            alt = Path("./instructions/desi_instructions.md")
-            if alt.exists():
-                self.instructions_file = alt
+            for alt in [Path("./desi_instructions.md"), Path("./instructions/desi_instructions.md")]:
+                if alt.exists():
+                    self.instructions_file = alt
+                    break
 
         self.tools_allowed = list(FILE_ACCESS_TOOLS)
         self.tools_disabled = list(CODING_EXECUTION_TOOLS)
 
-        # Assemble underlying ThreeGAgent using custom agent_id and brain model
+        # Assemble underlying ThreeGAgent
         self.config = ThreeGAgentConfig(
             agent_name="3G-designer-subagent",
-            agent_id=self.agent_id,
+            agent_id=canonicalize_model_name(brain),
             model=brain,
             brain=brain,
             skills_dir=self.skills_dir,
@@ -296,14 +295,12 @@ class BuilderSubagent:
     def __init__(
         self,
         environment_store: EnvironmentStore,
-        agent_id: Optional[str] = None,
         client_handle: Optional[InitializedClient] = None,
         output_dir: Union[str, Path] = "./outputs/build",
         state_dir: Union[str, Path] = "./.3g_agent",
         brain: str = MODEL_BUILDER,
     ) -> None:
         self.brain = brain
-        self.agent_id = agent_id or "build-001"
         self.output_dir = Path(output_dir)
         self.environment = environment_store
         self.state_dir = Path(state_dir)
@@ -314,7 +311,7 @@ class BuilderSubagent:
         # Builder subagent has NO specific system instruction file and NO custom skills
         self.config = ThreeGAgentConfig(
             agent_name="3G-builder-subagent",
-            agent_id=self.agent_id,
+            agent_id=canonicalize_model_name(brain),
             model=brain,
             brain=brain,
             skills_dir=None,

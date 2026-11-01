@@ -35,30 +35,33 @@ def canonicalize_model_name(name: Optional[str]) -> str:
 
 
 def resolve_default_agent_id() -> str:
-    """Resolves the default custom agent ID, ignoring boolean environment flags.
-    
-    agent_id is strictly the user-defined custom agent identifier (e.g. orch-001, coder-12345),
-    never a base model name or engine name.
-    """
-    env_agent = os.getenv("ANTIGRAVITY_AGENT_ID")
+    """Resolves the default Antigravity coding agent ID, ignoring boolean environment flags."""
+    env_agent = os.getenv("ANTIGRAVITY_AGENT_ID") or os.getenv("ANTIGRAVITY_MODEL")
     if not env_agent:
         raw_agent = os.getenv("ANTIGRAVITY_AGENT")
         if raw_agent and raw_agent.lower() not in ("1", "0", "true", "false", "yes", "no"):
             env_agent = raw_agent
 
-    return env_agent or "orch-001"
+    return env_agent or "antigravity-preview-09-2026"
 
 
 def is_base_agent_id(agent_id: Optional[str]) -> bool:
-    """Deprecated helper retained for backwards compatibility.
-    
-    In 3G-agent, agent_id is strictly the ID given to the custom agent.
-    """
-    return False
+    """True if agent_id is a stock Antigravity or Gemini engine rather than custom remote agent."""
+    if not agent_id:
+        return False
+    clean = agent_id.strip().lower()
+    return (
+        clean.startswith("antigravity-")
+        or clean.startswith("gemini-")
+        or "flash" in clean
+        or "3.1" in clean
+        or "3.5" in clean
+        or "3.8" in clean
+    )
 
 
 def resolve_default_instructions_file() -> Path:
-    """Finds instructions file strictly within the /instructions directory."""
+    """Finds instructions file, searching instructions/orch_instruction.md, desi_instructions.md, etc."""
     env_file = os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE")
     if env_file:
         p = Path(env_file)
@@ -66,12 +69,14 @@ def resolve_default_instructions_file() -> Path:
             return p
     for candidate in [
         Path("./instructions/orch_instruction.md"),
+        Path("./orch_instruction.md"),
         Path("./instructions/desi_instructions.md"),
+        Path("./desi_instructions.md"),
+        Path("./instructions.md"),
     ]:
         if candidate.exists():
             return candidate
-    return Path("./instructions/orch_instruction.md")
-
+    return Path("./desi_instructions.md")
 
 
 @dataclass
@@ -80,7 +85,7 @@ class ThreeGAgentConfig:
     
     Attributes:
         agent_name: Name identifier of the agent (default: "3G-agent").
-        agent_id: User-defined custom agent identifier (e.g. "orch-001", "coder-12345").
+        agent_id: Antigravity coding agent ID / model name.
         environment_type: Sandbox environment type ("remote" by default).
         api_key: Gemini/Google Cloud API Key (optional if using ADC or env vars).
         skills_dir: Path to directory containing a skill or group of skills (None if no skills needed).
@@ -93,7 +98,7 @@ class ThreeGAgentConfig:
         system_instruction_override: Optional custom system instructions.
         instructions_file: Path to instructions file holding system prompt.
         extra_sources: Additional files or sources to mount in the remote environment.
-        model_name: Optional backwards-compatible alias for model / brain.
+        model_name: Optional backwards-compatible alias for agent_id / model.
         model: Model / brain identifier (e.g. '3.1 flash lite', '3.5 flash lite', '3.8 flash').
         brain: Semantic alias for model.
         tools_allowed: Optional list of allowed tools (for tool restriction).
@@ -120,13 +125,17 @@ class ThreeGAgentConfig:
     tools_allowed: Optional[List[str]] = None
     tools_disabled: Optional[List[str]] = None
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name in ("model", "brain", "model_name") and value is not None:
+            super().__setattr__("agent_id", str(value))
+        elif name == "agent_id" and value is not None:
+            super().__setattr__("model", str(value))
+            super().__setattr__("brain", str(value))
+            super().__setattr__("model_name", str(value))
+
     def __post_init__(self) -> None:
         """Convert string paths to Path objects and normalize defaults."""
-        # Synchronize brain and model aliases without overwriting agent_id
-        if self.brain and not self.model:
-            self.model = self.brain
-        elif self.model and not self.brain:
-            self.brain = self.model
         if self.skills_dir is not None and isinstance(self.skills_dir, str):
             self.skills_dir = Path(self.skills_dir)
         if isinstance(self.state_dir, str):
@@ -136,32 +145,25 @@ class ThreeGAgentConfig:
         if isinstance(self.instructions_file, str):
             self.instructions_file = Path(self.instructions_file)
 
-        # Ensure custom agent_id is valid and non-boolean
-        if not self.agent_id or str(self.agent_id).strip() in ("1", "0", "true", "false", "yes", "no"):
-            self.agent_id = resolve_default_agent_id()
-
-        # Resolve model / brain aliases without overwriting agent_id
+        # Harmonize agent_id, model, model_name, and brain
         chosen_model = self.model or self.brain or self.model_name
-        if chosen_model and str(chosen_model).strip() not in ("1", "0", "true", "false", "yes", "no"):
-            clean_m = str(chosen_model).strip()
-            self.model = clean_m
-            self.brain = clean_m
-            self.model_name = clean_m
+        if chosen_model and chosen_model.strip():
+            clean_model = chosen_model.strip()
+            if clean_model.lower() not in ("1", "0", "true", "false", "yes", "no"):
+                self.agent_id = clean_model
+        if not self.agent_id or self.agent_id.strip() in ("1", "0", "true", "false", "yes", "no"):
+            self.agent_id = resolve_default_agent_id()
+        self.model_name = self.agent_id
+        self.model = self.agent_id
+        self.brain = self.agent_id
 
-        # Resolve API Key from environment or .env if not explicitly passed
+        # Resolve API Key from environment if not explicitly passed
         if not self.api_key:
-            from .initializer import load_dotenv_if_present
-            load_dotenv_if_present()
             self.api_key = (
                 os.getenv("GEMINI_API_KEY")
                 or os.getenv("GOOGLE_API_KEY")
                 or os.getenv("ANTIGRAVITY_API_KEY")
             )
-
-        if self.api_key:
-            self.api_key = self.api_key.strip()
-            if (self.api_key.startswith('"') and self.api_key.endswith('"')) or (self.api_key.startswith("'") and self.api_key.endswith("'")):
-                self.api_key = self.api_key[1:-1].strip()
 
         # Resolve GCP Project from environment if not explicitly passed
         if not self.project:
@@ -212,7 +214,7 @@ class ClientParameterCollector:
             skills_dir=resolved_skills_dir,
             state_dir=Path(os.getenv("ANTIGRAVITY_STATE_DIR", "./.3g_agent")),
             output_dir=Path(os.getenv("ANTIGRAVITY_OUTPUT_DIR", "./outputs/3g_agent")),
-            instructions_file=Path(os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE", "./instructions/orch_instruction.md")),
+            instructions_file=Path(os.getenv("ANTIGRAVITY_INSTRUCTIONS_FILE", "./instructions.md")),
             vertex_ai=os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() in ("true", "1", "yes"),
             project=os.getenv("GOOGLE_CLOUD_PROJECT"),
             location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
