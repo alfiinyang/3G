@@ -1,19 +1,17 @@
 """Subagent Management and Definitions for 3G-agent Architecture.
 
-Features:
-- Subagent YAML configuration loader (parsing subagents/*.yaml).
-- Designer Subagent:
-  * Brain (model): 3.5 flash lite (gemini-3.5-flash-lite).
-  * Preloaded with skills from ./skills directory (pedagogy-engineering).
-  * Preloaded with desi_instructions (instructions/desi_instructions.md).
-  * Coding tools disabled except file access (create, read, write, list) tools.
-  * Outputs saved strictly to outputs/design.
-- Builder Subagent:
-  * Brain (model): 3.8 flash (gemini-3.8-flash).
-  * No specific system instruction (called only when time to build).
-  * Full coding and execution tools enabled.
-  * Outputs saved strictly to outputs/build.
-- Both subagents share the same remote environment container across turns.
+Four Remote Preloaded Agents:
+1. Orchestrator (parent agent, primary facade)
+2. Pedagogy Engineer Subagent (PEDA: curriculum, learning goals, Bloom objectives)
+3. Learning Experience Engineer Subagent (LX: narrative, scenes, learner journey, tasks)
+4. Software Product Manager Subagent (PM: requirements translation, PRD, technical contracts)
+
+Key Principles:
+- All agents sit in Antigravity SDK remote environment with preloaded instructions.
+- No skills employed (skills folder kept).
+- All agents share the same environment container across turns (environment = previous_turn.environment_id).
+- Turn ID continuity: every turn captures turn.id and saves it to TurnIdRegistry for that agent,
+  so subsequent turns pass previous_interaction_id = previous_turn.id.
 """
 
 from __future__ import annotations
@@ -30,13 +28,21 @@ except ImportError:
 
 from .agent import ThreeGAgent, ThreeGAgentResponse
 from .config import (
+    AGENT_LEARNING_EXPERIENCE,
+    AGENT_ORCHESTRATOR,
+    AGENT_PEDAGOGY,
+    AGENT_PRODUCT_MANAGER,
     MODEL_BUILDER,
     MODEL_DESIGNER,
     ThreeGAgentConfig,
     canonicalize_model_name,
+    resolve_lx_agent_id,
+    resolve_pedagogy_agent_id,
+    resolve_pm_agent_id,
 )
 from .environment import EnvironmentStore
 from .initializer import InitializedClient
+from .registry import TurnIdRegistry
 from .skills import SkillLoader
 from .status import TurnStatusReporter
 from .storage import FileStorageManager
@@ -44,10 +50,16 @@ from .storage import FileStorageManager
 logger = logging.getLogger("3G-agent.subagents")
 
 
-# Standard file access tools permitted for Designer
-FILE_ACCESS_TOOLS = ["file_read", "file_write", "file_create", "list_directory", "read_file", "write_file", "create_file", "list_dir"]
-# Coding / terminal execution tools disabled for Designer
-CODING_EXECUTION_TOOLS = ["code_execution", "run_command", "terminal", "bash", "execute_python", "shell"]
+# Standard file access tools permitted for design subagents
+FILE_ACCESS_TOOLS = [
+    "file_read", "file_write", "file_create", "list_directory",
+    "read_file", "write_file", "create_file", "list_dir", "view_file",
+    "edit_file", "search_directory", "find_file",
+]
+# Coding / terminal execution tools
+CODING_EXECUTION_TOOLS = [
+    "code_execution", "run_command", "terminal", "bash", "execute_python", "shell"
+]
 
 
 @dataclass
@@ -189,26 +201,28 @@ class SubagentYamlLoader:
         return configs
 
 
-class DesignerSubagent:
-    """Specialized Pedagogical Designer Subagent.
-    
+class PedagogySubagent:
+    """Specialized Pedagogy Engineering Subagent (PEDA).
+
     Attributes:
-        brain / model: 3.5 flash lite (gemini-3.5-flash-lite).
-        skills: Preloaded from ./skills folder (pedagogy-engineering).
-        instructions: Preloaded from instructions/desi_instructions.md.
-        tools: File access only (create/read/write/list); coding tools disabled.
-        outputs: Written strictly to outputs/design.
+        agent_name: pedagogy_engineer
+        role: Pedagogical Architecture, measurable objectives, curricula
+        output_dir: outputs/pedagogical_design
+        instructions: Preloaded remotely in Antigravity SDK environment
+        skills: No local skills employed
     """
 
     def __init__(
         self,
         environment_store: EnvironmentStore,
         client_handle: Optional[InitializedClient] = None,
+        turn_registry: Optional[TurnIdRegistry] = None,
         skills_dir: Union[str, Path] = "./skills",
-        instructions_file: Union[str, Path, None] = "./instructions/desi_instructions.md",
-        output_dir: Union[str, Path] = "./outputs/design",
+        instructions_file: Union[str, Path, None] = "./instructions/PEDA-instructions.md",
+        output_dir: Union[str, Path] = "./outputs/pedagogical_design",
         state_dir: Union[str, Path] = "./.3g_agent",
         brain: str = MODEL_DESIGNER,
+        agent_id: Optional[str] = None,
     ) -> None:
         self.brain = brain
         self.skills_dir = Path(skills_dir)
@@ -216,21 +230,16 @@ class DesignerSubagent:
         self.output_dir = Path(output_dir)
         self.environment = environment_store
         self.state_dir = Path(state_dir)
-
-        # Confirm instructions file exists or find fallback
-        if self.instructions_file and not self.instructions_file.exists():
-            for alt in [Path("./desi_instructions.md"), Path("./instructions/desi_instructions.md")]:
-                if alt.exists():
-                    self.instructions_file = alt
-                    break
+        self.turn_registry = turn_registry or TurnIdRegistry(state_dir=self.state_dir)
 
         self.tools_allowed = list(FILE_ACCESS_TOOLS)
         self.tools_disabled = list(CODING_EXECUTION_TOOLS)
 
-        # Assemble underlying ThreeGAgent
+        resolved_agent_id = agent_id or resolve_pedagogy_agent_id()
+
         self.config = ThreeGAgentConfig(
-            agent_name="3G-designer-subagent",
-            agent_id=canonicalize_model_name(brain),
+            agent_name=AGENT_PEDAGOGY,
+            agent_id=resolved_agent_id,
             model=brain,
             brain=brain,
             skills_dir=self.skills_dir,
@@ -241,12 +250,12 @@ class DesignerSubagent:
             tools_disabled=self.tools_disabled,
         )
 
-        # Reuse client handle if supplied, or initialize client
         from .initializer import AgentClientInitializer
         self.client_handle = client_handle or AgentClientInitializer.initialize(
             self.config, interactive_prompt=False
         )
-        self.skill_loader = SkillLoader(self.skills_dir)
+        # Skills folder kept, but no skills employed
+        self.skill_loader = SkillLoader.empty()
         self.storage_manager = FileStorageManager(output_dir=self.output_dir)
 
         self._agent = ThreeGAgent(
@@ -255,7 +264,8 @@ class DesignerSubagent:
             skill_loader=self.skill_loader,
             environment_store=self.environment,
             storage_manager=self.storage_manager,
-            load_local_context=True,
+            turn_registry=self.turn_registry,
+            load_local_context=False,
         )
 
     def is_tool_allowed(self, tool_name: str) -> bool:
@@ -263,7 +273,7 @@ class DesignerSubagent:
         clean = tool_name.lower().strip()
         if any(bad in clean for bad in ("code", "exec", "terminal", "bash", "shell", "run")):
             return False
-        return any(ok in clean for ok in ("file", "read", "write", "create", "list", "dir"))
+        return any(ok in clean for ok in ("file", "read", "write", "create", "list", "dir", "view", "edit"))
 
     def execute(
         self,
@@ -271,8 +281,8 @@ class DesignerSubagent:
         status_reporter: Optional[TurnStatusReporter] = None,
         show_status: bool = True,
     ) -> ThreeGAgentResponse:
-        """Executes a design task in the shared remote environment."""
-        logger.info("Executing Designer Subagent (brain: %s) -> outputs/design", self.brain)
+        """Executes a pedagogy engineering task in the shared remote environment."""
+        logger.info("Executing Pedagogy Subagent -> %s", self.output_dir)
         return self._agent.execute(
             prompt=prompt,
             save_deliverables_locally=True,
@@ -281,42 +291,49 @@ class DesignerSubagent:
         )
 
 
-class BuilderSubagent:
-    """Specialized Implementation and Code Construction Builder Subagent.
-    
+class LearningExperienceSubagent:
+    """Specialized Learning Experience Engineering Subagent (LX).
+
     Attributes:
-        brain / model: 3.8 flash (gemini-3.8-flash).
-        skills: None (builder agent has no custom skills).
-        instructions: None (builder agent has no specific system instruction).
-        tools: Full coding and execution tools enabled.
-        outputs: Written strictly to outputs/build.
+        agent_name: learning_experience_engineer
+        role: Learner journey, scenes, narrative, tasks, and interaction contexts
+        output_dir: outputs/learning_experience_design
+        instructions: Preloaded remotely in Antigravity SDK environment
+        skills: No local skills employed
     """
 
     def __init__(
         self,
         environment_store: EnvironmentStore,
         client_handle: Optional[InitializedClient] = None,
-        output_dir: Union[str, Path] = "./outputs/build",
+        turn_registry: Optional[TurnIdRegistry] = None,
+        skills_dir: Union[str, Path] = "./skills",
+        instructions_file: Union[str, Path, None] = "./instructions/LX-instructions.md",
+        output_dir: Union[str, Path] = "./outputs/learning_experience_design",
         state_dir: Union[str, Path] = "./.3g_agent",
-        brain: str = MODEL_BUILDER,
+        brain: str = MODEL_DESIGNER,
+        agent_id: Optional[str] = None,
     ) -> None:
         self.brain = brain
+        self.skills_dir = Path(skills_dir)
+        self.instructions_file = Path(instructions_file) if instructions_file else None
         self.output_dir = Path(output_dir)
         self.environment = environment_store
         self.state_dir = Path(state_dir)
+        self.turn_registry = turn_registry or TurnIdRegistry(state_dir=self.state_dir)
 
-        self.tools_allowed = list(FILE_ACCESS_TOOLS) + list(CODING_EXECUTION_TOOLS)
-        self.tools_disabled: List[str] = []
+        self.tools_allowed = list(FILE_ACCESS_TOOLS)
+        self.tools_disabled = list(CODING_EXECUTION_TOOLS)
 
-        # Builder subagent has NO specific system instruction file and NO custom skills
+        resolved_agent_id = agent_id or resolve_lx_agent_id()
+
         self.config = ThreeGAgentConfig(
-            agent_name="3G-builder-subagent",
-            agent_id=canonicalize_model_name(brain),
+            agent_name=AGENT_LEARNING_EXPERIENCE,
+            agent_id=resolved_agent_id,
             model=brain,
             brain=brain,
-            skills_dir=None,
-            instructions_file=None,
-            system_instruction_override=None,
+            skills_dir=self.skills_dir,
+            instructions_file=self.instructions_file,
             output_dir=self.output_dir,
             state_dir=self.state_dir,
             tools_allowed=self.tools_allowed,
@@ -336,11 +353,99 @@ class BuilderSubagent:
             skill_loader=self.skill_loader,
             environment_store=self.environment,
             storage_manager=self.storage_manager,
+            turn_registry=self.turn_registry,
             load_local_context=False,
         )
 
     def is_tool_allowed(self, tool_name: str) -> bool:
-        """Confirms tool is permitted (all coding and file tools allowed)."""
+        clean = tool_name.lower().strip()
+        if any(bad in clean for bad in ("code", "exec", "terminal", "bash", "shell", "run")):
+            return False
+        return any(ok in clean for ok in ("file", "read", "write", "create", "list", "dir", "view", "edit"))
+
+    def execute(
+        self,
+        prompt: str,
+        status_reporter: Optional[TurnStatusReporter] = None,
+        show_status: bool = True,
+    ) -> ThreeGAgentResponse:
+        """Executes a learning experience engineering task in the shared remote environment."""
+        logger.info("Executing Learning Experience Subagent -> %s", self.output_dir)
+        return self._agent.execute(
+            prompt=prompt,
+            save_deliverables_locally=True,
+            status_reporter=status_reporter,
+            show_status=show_status,
+        )
+
+
+class ProductManagerSubagent:
+    """Specialized Software Product Management Subagent (PM / RT).
+
+    Attributes:
+        agent_name: software_product_manager
+        role: Requirements translation, PRD, component contracts, state flow, verification
+        output_dir: outputs/product_requirements
+        instructions: Preloaded remotely in Antigravity SDK environment
+        skills: No local skills employed
+    """
+
+    def __init__(
+        self,
+        environment_store: EnvironmentStore,
+        client_handle: Optional[InitializedClient] = None,
+        turn_registry: Optional[TurnIdRegistry] = None,
+        skills_dir: Union[str, Path] = "./skills",
+        instructions_file: Union[str, Path, None] = "./instructions/PM-instructions.md",
+        output_dir: Union[str, Path] = "./outputs/product_requirements",
+        state_dir: Union[str, Path] = "./.3g_agent",
+        brain: str = MODEL_BUILDER,
+        agent_id: Optional[str] = None,
+    ) -> None:
+        self.brain = brain
+        self.skills_dir = Path(skills_dir)
+        self.instructions_file = Path(instructions_file) if instructions_file else None
+        self.output_dir = Path(output_dir)
+        self.environment = environment_store
+        self.state_dir = Path(state_dir)
+        self.turn_registry = turn_registry or TurnIdRegistry(state_dir=self.state_dir)
+
+        self.tools_allowed = list(FILE_ACCESS_TOOLS) + list(CODING_EXECUTION_TOOLS)
+        self.tools_disabled: List[str] = []
+
+        resolved_agent_id = agent_id or resolve_pm_agent_id()
+
+        self.config = ThreeGAgentConfig(
+            agent_name=AGENT_PRODUCT_MANAGER,
+            agent_id=resolved_agent_id,
+            model=brain,
+            brain=brain,
+            skills_dir=self.skills_dir,
+            instructions_file=self.instructions_file,
+            output_dir=self.output_dir,
+            state_dir=self.state_dir,
+            tools_allowed=self.tools_allowed,
+            tools_disabled=self.tools_disabled,
+        )
+
+        from .initializer import AgentClientInitializer
+        self.client_handle = client_handle or AgentClientInitializer.initialize(
+            self.config, interactive_prompt=False
+        )
+        self.skill_loader = SkillLoader.empty()
+        self.storage_manager = FileStorageManager(output_dir=self.output_dir)
+
+        self._agent = ThreeGAgent(
+            config=self.config,
+            initialized_client=self.client_handle,
+            skill_loader=self.skill_loader,
+            environment_store=self.environment,
+            storage_manager=self.storage_manager,
+            turn_registry=self.turn_registry,
+            load_local_context=False,
+        )
+
+    def is_tool_allowed(self, tool_name: str) -> bool:
         return True
 
     def execute(
@@ -349,11 +454,19 @@ class BuilderSubagent:
         status_reporter: Optional[TurnStatusReporter] = None,
         show_status: bool = True,
     ) -> ThreeGAgentResponse:
-        """Executes a building task in the shared remote environment."""
-        logger.info("Executing Builder Subagent (brain: %s) -> outputs/build", self.brain)
+        """Executes a software product management / PRD task in the shared remote environment."""
+        logger.info("Executing Product Manager Subagent -> %s", self.output_dir)
         return self._agent.execute(
             prompt=prompt,
             save_deliverables_locally=True,
             status_reporter=status_reporter,
             show_status=show_status,
         )
+
+
+# Backward-compatible aliases
+DesignerSubagent = PedagogySubagent
+PedagogyEngineerSubagent = PedagogySubagent
+LXSubagent = LearningExperienceSubagent
+SoftwareProductManagerSubagent = ProductManagerSubagent
+BuilderSubagent = ProductManagerSubagent

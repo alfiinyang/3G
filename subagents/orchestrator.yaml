@@ -1,12 +1,13 @@
 name: orchestrator
 role: parent_orchestrator
-description: Primary interface coordinating user requests, delegating to subagents, and validating output
+description: Primary user interface coordinating user requests, delegating to PEDA, LX, and PM subagents, and validating output
 brain: 3.1 flash lite
 model: gemini-3.1-flash-lite
 system_instruction_file: instructions/orch_instruction.md
 subagents:
-  - designer
-  - builder
+  - pedagogy_engineer
+  - learning_experience_engineer
+  - software_product_manager
 output_dir: outputs
 lifecycle: persistent
 environment: shared

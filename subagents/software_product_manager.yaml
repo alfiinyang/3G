@@ -1,0 +1,23 @@
+name: software_product_manager
+role: software_product_manager
+description: Software engineering Product Requirements Document (PRD), component contracts, state flow, and verification subagent
+brain: 3.8 flash
+model: gemini-3.8-flash
+system_instruction_file: instructions/PM-instructions.md
+skills_dir: null
+skills: []
+tools:
+  allowed:
+    - view_file
+    - create_file
+    - edit_file
+    - list_dir
+    - search_directory
+    - find_file
+    - code_execution
+    - run_command
+    - terminal
+  disabled: []
+output_dir: outputs/product_requirements
+lifecycle: on_demand
+environment: shared

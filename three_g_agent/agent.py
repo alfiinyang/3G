@@ -20,7 +20,7 @@ from .config import ClientParameterCollector, ThreeGAgentConfig
 from .deletion import AgentDeletionManager, DeletionResult
 from .environment import EnvironmentStore
 from .initializer import InitializedClient, ModelInitializer
-from .registry import AgentRegistry, ConversationSession
+from .registry import AgentRegistry, ConversationSession, TurnIdRegistry
 from .skills import Skill, SkillLoader
 from .status import TurnStatusReporter
 from .storage import FileStorageManager, SavedFile
@@ -35,7 +35,7 @@ class ThreeGAgentResponse:
     Attributes:
         output_text: Text response or deliverable from the agent.
         environment_id: The remote environment container ID used/persisted.
-        interaction_id: Unique interaction ID for multi-turn history.
+        interaction_id: Unique interaction ID / turn ID for multi-turn history.
         session_id: The conversation session ID holding this environment state.
         saved_files: List of files created by the agent and saved locally.
         raw_interaction: The underlying raw interaction object from SDK.
@@ -46,6 +46,11 @@ class ThreeGAgentResponse:
     session_id: Optional[str] = None
     saved_files: List[SavedFile] = field(default_factory=list)
     raw_interaction: Any = None
+
+    @property
+    def turn_id(self) -> Optional[str]:
+        """Alias for interaction_id representing the turn ID."""
+        return self.interaction_id
 
     def get_file_links(self) -> List[str]:
         """Returns a list of clickable markdown file links for saved deliverables."""
@@ -152,11 +157,12 @@ class ThreeGAgent:
         environment_store: EnvironmentStore,
         storage_manager: FileStorageManager,
         registry: Optional[AgentRegistry] = None,
-        load_local_context: bool = True,
+        turn_registry: Optional[TurnIdRegistry] = None,
+        load_local_context: bool = False,
     ) -> None:
         """Initializes 3G-agent with pre-configured and pre-initialized dependencies.
 
-        load_local_context: If False (existing custom remote agent), local skills and
+        load_local_context: If False (default for preloaded remote agents), local skills and
         instructions are never read or uploaded; the agent's persisted remote
         base_environment is used instead.
         """
@@ -167,9 +173,10 @@ class ThreeGAgent:
         self.environment = environment_store
         self.storage = storage_manager
         self.registry = registry or AgentRegistry(state_dir=config.state_dir)
+        self.turn_registry = turn_registry or TurnIdRegistry(state_dir=config.state_dir)
         self.load_local_context = load_local_context
         self.active_session_id: Optional[str] = None
-        self.last_interaction_id: Optional[str] = None
+        self.last_interaction_id: Optional[str] = self.turn_registry.get_last_turn_id(config.agent_name)
 
 
     @classmethod
@@ -217,25 +224,23 @@ class ThreeGAgent:
             location=location,
             system_instruction_override=system_instruction_override,
         )
-        # Existing custom agents (created via client.agents.create) already hold their
-        # skills + instructions in their remote base_environment: never reload locally.
-        from .config import is_base_agent_id
+        # Preloaded remote agents hold their instructions remotely; no local skills employed
         if load_local_context is None:
-            load_local_context = is_base_agent_id(target_agent)
+            load_local_context = False
 
         ClientParameterCollector.validate(config, require_skills_dir=load_local_context)
 
         # Step 2: Separate Client Initialization
         initialized_client = ModelInitializer.initialize(config)
 
-        # Step 3: Skill Discovery & Packaging (only for stock base engines)
+        # Step 3: Skill Discovery & Packaging (skills folder kept, but no skills employed)
         if load_local_context:
             skill_loader = SkillLoader(config.skills_dir)
         else:
             skill_loader = SkillLoader.empty()
             logger.info(
-                "Agent '%s' is an existing remote agent: using skills/instructions persisted "
-                "in its remote environment (local files are not loaded).",
+                "Agent '%s' is an existing remote agent: using instructions preloaded "
+                "in its remote environment (skills are not employed).",
                 target_agent,
             )
 
@@ -248,8 +253,9 @@ class ThreeGAgent:
         # Step 5: File Storage & Local Accessibility Manager
         storage_manager = FileStorageManager(output_dir=config.output_dir)
 
-        # Step 6: Agent & Session Registry
+        # Step 6: Agent & Session Registry & Turn ID Registry
         registry = AgentRegistry(state_dir=config.state_dir)
+        turn_registry = TurnIdRegistry(state_dir=config.state_dir)
 
         # Step 7: Return the assembled 3G-agent
         return cls(
@@ -259,6 +265,7 @@ class ThreeGAgent:
             environment_store=environment_store,
             storage_manager=storage_manager,
             registry=registry,
+            turn_registry=turn_registry,
             load_local_context=load_local_context,
         )
 
@@ -348,8 +355,11 @@ class ThreeGAgent:
         if env_payload is not None:
             interaction_kwargs["environment"] = env_payload
 
-        if self.last_interaction_id and not force_fresh_environment:
-            interaction_kwargs["previous_interaction_id"] = self.last_interaction_id
+        # Conversational continuity: query turn_id_registry for last saved turn ID
+        prior_turn_id = self.last_interaction_id or self.turn_registry.get_last_turn_id(self.config.agent_name)
+        if prior_turn_id and not force_fresh_environment:
+            interaction_kwargs["previous_interaction_id"] = prior_turn_id
+            logger.info("Agent '%s' resuming conversation at turn.id: %s", self.config.agent_name, prior_turn_id)
 
         reporter.thinking("Reasoning through instructions and planning solution...")
 
@@ -424,19 +434,24 @@ class ThreeGAgent:
 
         reporter.complete("Response received")
 
-        # 5. Securely capture and persist the remote environment ID
+        # 5. Securely capture and persist the remote environment ID & turn ID
         returned_env_id = getattr(interaction, "environment_id", None) or (
             env_payload if isinstance(env_payload, str) else "env_persisted_active"
         )
         interaction_id = getattr(interaction, "id", None)
         if interaction_id:
             self.last_interaction_id = interaction_id
+            self.turn_registry.save_turn_id(
+                agent_name=self.config.agent_name,
+                turn_id=interaction_id,
+                metadata={"last_prompt_snippet": prompt[:100], "agent_id": self.config.agent_id},
+            )
 
         if returned_env_id and returned_env_id != "unknown_env":
             self.environment.save_environment_id(
                 environment_id=returned_env_id,
                 skills_signature=self.skills.get_combined_signature() if self.load_local_context else None,
-                metadata={"last_prompt_snippet": prompt[:100]},
+                metadata={"last_prompt_snippet": prompt[:100], "agent": self.config.agent_name},
             )
             # Track and hold environment_id per conversation session in registry
             if self.active_session_id:

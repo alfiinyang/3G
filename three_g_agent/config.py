@@ -16,6 +16,12 @@ MODEL_ORCHESTRATOR = "3.1 flash lite"
 MODEL_DESIGNER = "3.5 flash lite"
 MODEL_BUILDER = "3.8 flash"
 
+# 4 Specialized Remote Agent Identifiers
+AGENT_ORCHESTRATOR = "orchestrator"
+AGENT_PEDAGOGY = "pedagogy_engineer"
+AGENT_LEARNING_EXPERIENCE = "learning_experience_engineer"
+AGENT_PRODUCT_MANAGER = "software_product_manager"
+
 CANONICAL_MODEL_MAP: Dict[str, str] = {
     "3.1 flash lite": "gemini-3.1-flash-lite",
     "3.1-flash-lite": "gemini-3.1-flash-lite",
@@ -32,6 +38,40 @@ def canonicalize_model_name(name: Optional[str]) -> str:
         return "gemini-3.1-flash-lite"
     clean = str(name).strip()
     return CANONICAL_MODEL_MAP.get(clean.lower(), clean)
+
+
+def resolve_orchestrator_agent_id() -> str:
+    """Resolves remote agent ID for the Orchestrator."""
+    return os.getenv("ANTIGRAVITY_ORCHESTRATOR_AGENT_ID") or os.getenv("ANTIGRAVITY_ORCHESTRATOR_ID") or AGENT_ORCHESTRATOR
+
+
+def resolve_pedagogy_agent_id() -> str:
+    """Resolves remote agent ID for the Pedagogy Engineer subagent."""
+    return (
+        os.getenv("ANTIGRAVITY_PEDAGOGY_AGENT_ID")
+        or os.getenv("ANTIGRAVITY_PEDAGOGY_ID")
+        or os.getenv("ANTIGRAVITY_DESIGNER_ID")
+        or AGENT_PEDAGOGY
+    )
+
+
+def resolve_lx_agent_id() -> str:
+    """Resolves remote agent ID for the Learning Experience Engineer subagent."""
+    return (
+        os.getenv("ANTIGRAVITY_LX_AGENT_ID")
+        or os.getenv("ANTIGRAVITY_LEARNING_EXPERIENCE_ID")
+        or AGENT_LEARNING_EXPERIENCE
+    )
+
+
+def resolve_pm_agent_id() -> str:
+    """Resolves remote agent ID for the Software Product Manager subagent."""
+    return (
+        os.getenv("ANTIGRAVITY_PM_AGENT_ID")
+        or os.getenv("ANTIGRAVITY_PRODUCT_MANAGER_ID")
+        or os.getenv("ANTIGRAVITY_BUILDER_ID")
+        or AGENT_PRODUCT_MANAGER
+    )
 
 
 def resolve_default_agent_id() -> str:

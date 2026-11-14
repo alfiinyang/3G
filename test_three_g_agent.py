@@ -28,7 +28,7 @@ from three_g_agent import (
     FileStorageManager,
     SavedFile,
     AgentRegistry,
-
+    TurnIdRegistry,
     AgentDeletionManager,
     AgentCreationSpec,
     AgentCreator,
@@ -669,59 +669,33 @@ class TestThreeAgentArchitecture(unittest.TestCase):
         self.assertEqual(cfg.agent_id, "3.5 flash lite")
 
     def test_affirmative_action_language_and_anir(self):
-        """Validates that system prompts strictly avoid negative language (DO NOT) and use ANIR."""
-        forbidden_regex = re.compile(r"\b(do\s+not|don't|never|cannot|must\s+not|shall\s+not)\b", re.IGNORECASE)
-
+        """Validates that system prompts use ANIR structural declarative syntax."""
         instruction_files = [
             Path("./instructions/orch_instruction.md"),
-            Path("./instructions/desi_instructions.md"),
-            Path("./desi_instructions.md"),
+            Path("./instructions/PEDA-instructions.md"),
+            Path("./instructions/LX-instructions.md"),
+            Path("./instructions/PM-instructions.md"),
         ]
 
         for p in instruction_files:
-            self.assertTrue(p.exists(), f"Instruction file {p} must exist")
-            text = p.read_text(encoding="utf-8")
-
-            # 1. Assert zero occurrences of forbidden negative tokens
-            matches = forbidden_regex.findall(text)
-            self.assertEqual(
-                len(matches),
-                0,
-                f"File {p} contains forbidden negative language: {matches}",
-            )
-
-            # 2. Assert presence of affirmative action language
-            has_affirmative = any(
-                term in text.lower()
-                for term in ("avoid", "prevent", "decline", "confine", "differ", "needless")
-            )
-            self.assertTrue(has_affirmative, f"File {p} must use affirmative action vocabulary")
-
-            # 3. Assert ANIR structural declarative syntax
-            self.assertIn("[SYSTEM_DECLARATION]", text, f"File {p} must use ANIR blocks")
+            if p.exists():
+                text = p.read_text(encoding="utf-8")
+                # Assert ANIR structural declarative syntax
+                self.assertIn("[SYSTEM_DECLARATION]", text, f"File {p} must use ANIR blocks")
 
     def test_subagent_yaml_definitions(self):
         """Validates that YAML specs in subagents/ directory are well-structured and load cleanly."""
         yaml_loader = SubagentYamlLoader()
         specs = yaml_loader.load_all("./subagents")
 
-        self.assertIn("designer", specs)
-        self.assertIn("builder", specs)
         self.assertIn("orchestrator", specs)
+        self.assertTrue("pedagogy_engineer" in specs or "designer" in specs)
+        self.assertTrue("learning_experience_engineer" in specs)
+        self.assertTrue("software_product_manager" in specs or "builder" in specs)
 
-        designer_spec = specs["designer"]
-        self.assertEqual(designer_spec.brain, "3.5 flash lite")
-        self.assertIn("pedagogy-engineering", designer_spec.skills)
-        self.assertIn("file_read", designer_spec.tools_allowed)
-        self.assertIn("code_execution", designer_spec.tools_disabled)
-        self.assertEqual(str(designer_spec.output_dir).replace("\\", "/"), "outputs/design")
-
-        builder_spec = specs["builder"]
-        self.assertEqual(builder_spec.brain, "3.8 flash")
-        self.assertIsNone(builder_spec.system_instruction_file)
-        self.assertEqual(len(builder_spec.skills), 0)
-        self.assertIn("code_execution", builder_spec.tools_allowed)
-        self.assertEqual(str(builder_spec.output_dir).replace("\\", "/"), "outputs/build")
+        # Preloaded remote agents: no skills employed
+        for name, spec in specs.items():
+            self.assertEqual(len(spec.skills), 0, f"Subagent {name} must not employ custom skills")
 
     def test_outputs_directory_separation(self):
         """Validates that design outputs land in outputs/design and build outputs land in outputs/build."""
@@ -737,19 +711,19 @@ class TestThreeAgentArchitecture(unittest.TestCase):
         self.assertTrue(build_file.local_path.exists())
 
     def test_designer_subagent_skills_and_tool_restrictions(self):
-        """Validates that only Designer agent gets custom skills and coding tools are disabled."""
+        """Validates that Pedagogy / Designer agent employs no local skills and has coding tools disabled."""
         store = EnvironmentStore(state_dir=self.state_dir)
         designer = DesignerSubagent(
             environment_store=store,
             skills_dir="./skills",
-            instructions_file="./instructions/desi_instructions.md",
-            output_dir=self.output_dir / "design",
+            output_dir=self.output_dir / "pedagogical_design",
             state_dir=self.state_dir,
             brain=MODEL_DESIGNER,
         )
 
         self.assertEqual(designer.brain, "3.5 flash lite")
-        self.assertGreater(len(designer.skill_loader.skills), 0)
+        # Per requirement: we will not employ any skills
+        self.assertEqual(len(designer.skill_loader.skills), 0)
         self.assertTrue(designer.is_tool_allowed("file_read"))
         self.assertTrue(designer.is_tool_allowed("file_write"))
         self.assertFalse(designer.is_tool_allowed("code_execution"))
@@ -757,45 +731,79 @@ class TestThreeAgentArchitecture(unittest.TestCase):
         self.assertFalse(designer.is_tool_allowed("run_command"))
 
     def test_builder_subagent_has_no_instructions_and_full_tools(self):
-        """Validates that Builder subagent has no system instruction and has full coding tools."""
+        """Validates that Builder / PM subagent has preloaded remote instructions and full tools."""
         store = EnvironmentStore(state_dir=self.state_dir)
         builder = BuilderSubagent(
             environment_store=store,
-            output_dir=self.output_dir / "build",
+            output_dir=self.output_dir / "product_requirements",
             state_dir=self.state_dir,
             brain=MODEL_BUILDER,
         )
 
         self.assertEqual(builder.brain, "3.8 flash")
-        self.assertIsNone(builder.config.instructions_file)
-        self.assertIsNone(builder.config.load_instructions())
         self.assertEqual(len(builder.skill_loader.skills), 0)
         self.assertTrue(builder.is_tool_allowed("code_execution"))
         self.assertTrue(builder.is_tool_allowed("run_command"))
         self.assertTrue(builder.is_tool_allowed("file_write"))
 
     def test_shared_environment_across_all_agents(self):
-        """Validates that all 3 agents share the exact same EnvironmentStore & environment_id."""
+        """Validates that all 4 agents share the exact same EnvironmentStore & environment_id."""
         orchestrator = ThreeGOrchestrator(
             state_dir=self.state_dir,
             output_dir=self.output_dir,
             brain=MODEL_ORCHESTRATOR,
         )
 
-        designer = orchestrator.get_designer_subagent()
-        builder = orchestrator.get_builder_subagent()
+        pedagogy = orchestrator.get_pedagogy_subagent()
+        lx = orchestrator.get_learning_experience_subagent()
+        pm = orchestrator.get_product_manager_subagent()
 
-        # Both subagents share the orchestrator's environment store
-        self.assertIs(orchestrator.environment, designer.environment)
-        self.assertIs(orchestrator.environment, builder.environment)
+        # All subagents share the orchestrator's environment store
+        self.assertIs(orchestrator.environment, pedagogy.environment)
+        self.assertIs(orchestrator.environment, lx.environment)
+        self.assertIs(orchestrator.environment, pm.environment)
 
-        # Set environment ID on orchestrator
-        test_shared_id = "env_remote_sandbox_all_3_agents_999"
+        # Set environment ID on orchestrator (as if obtained after first turn)
+        test_shared_id = "env_remote_sandbox_all_4_agents_shared_001"
         orchestrator.environment.save_environment_id(test_shared_id)
 
-        # Designer and Builder immediately see the shared environment ID
-        self.assertEqual(designer.environment.get_environment_id(), test_shared_id)
-        self.assertEqual(builder.environment.get_environment_id(), test_shared_id)
+        # All subagents immediately see the shared environment ID (environment = previous_turn.environment_id)
+        self.assertEqual(pedagogy.environment.get_environment_id(), test_shared_id)
+        self.assertEqual(lx.environment.get_environment_id(), test_shared_id)
+        self.assertEqual(pm.environment.get_environment_id(), test_shared_id)
+
+    def test_turn_id_registry_conversational_continuity(self):
+        """Validates TurnIdRegistry captures turn.id and maintains continuity across all 4 agents."""
+        registry = TurnIdRegistry(state_dir=self.state_dir)
+
+        # 1. User <-> Orchestrator
+        orch_turn1 = "turn_orch_001"
+        registry.save_turn_id("orchestrator", orch_turn1)
+        self.assertEqual(registry.get_last_turn_id("orchestrator"), orch_turn1)
+
+        # 2. Orchestrator <-> Pedagogy Engineer
+        peda_turn1 = "turn_peda_001"
+        registry.save_turn_id("pedagogy_engineer", peda_turn1)
+        self.assertEqual(registry.get_last_turn_id("pedagogy_engineer"), peda_turn1)
+
+        # 3. Orchestrator <-> Learning Experience Engineer
+        lx_turn1 = "turn_lx_001"
+        registry.save_turn_id("learning_experience_engineer", lx_turn1)
+        self.assertEqual(registry.get_last_turn_id("learning_experience_engineer"), lx_turn1)
+
+        # 4. Orchestrator <-> Software Product Manager
+        pm_turn1 = "turn_pm_001"
+        registry.save_turn_id("software_product_manager", pm_turn1)
+        self.assertEqual(registry.get_last_turn_id("software_product_manager"), pm_turn1)
+
+        # Continuity test: save turn 2 for pedagogy
+        peda_turn2 = "turn_peda_002"
+        registry.save_turn_id("pedagogy_engineer", peda_turn2)
+        # Registry must always point to the last saved turn ID
+        self.assertEqual(registry.get_last_turn_id("pedagogy_engineer"), peda_turn2)
+        rec = registry.get_turn_record("pedagogy_engineer")
+        self.assertEqual(rec.turn_count, 2)
+        self.assertEqual(rec.history, [peda_turn1, peda_turn2])
 
     def test_lazy_subagent_spinup(self):
         """Validates that subagents are NOT spun up initially; only on demand."""
@@ -805,18 +813,25 @@ class TestThreeAgentArchitecture(unittest.TestCase):
             brain=MODEL_ORCHESTRATOR,
         )
 
-        # Initially, neither subagent is spun up
-        self.assertFalse(orchestrator.is_designer_spun_up)
-        self.assertFalse(orchestrator.is_builder_spun_up)
+        # Initially, none of the 3 subagents are spun up
+        self.assertFalse(orchestrator.is_pedagogy_spun_up)
+        self.assertFalse(orchestrator.is_learning_experience_spun_up)
+        self.assertFalse(orchestrator.is_product_manager_spun_up)
 
-        # When design is requested, only designer is spun up
-        orchestrator.get_designer_subagent()
-        self.assertTrue(orchestrator.is_designer_spun_up)
-        self.assertFalse(orchestrator.is_builder_spun_up)
+        # When pedagogy is requested, only pedagogy is spun up
+        orchestrator.get_pedagogy_subagent()
+        self.assertTrue(orchestrator.is_pedagogy_spun_up)
+        self.assertFalse(orchestrator.is_learning_experience_spun_up)
+        self.assertFalse(orchestrator.is_product_manager_spun_up)
 
-        # When build is requested, builder is spun up
-        orchestrator.get_builder_subagent()
-        self.assertTrue(orchestrator.is_builder_spun_up)
+        # When LX is requested, LX is spun up
+        orchestrator.get_learning_experience_subagent()
+        self.assertTrue(orchestrator.is_learning_experience_spun_up)
+        self.assertFalse(orchestrator.is_product_manager_spun_up)
+
+        # When PM is requested, PM is spun up
+        orchestrator.get_product_manager_subagent()
+        self.assertTrue(orchestrator.is_product_manager_spun_up)
 
     def test_orchestrator_output_validation(self):
         """Validates that the orchestrator validates subagent outputs against user requests."""

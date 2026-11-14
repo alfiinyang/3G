@@ -1,0 +1,23 @@
+name: pedagogy_engineer
+role: pedagogical_engineer
+description: Pedagogical architecture, curriculum scaffolding, measurable Bloom objectives, and rubric subagent
+brain: 3.5 flash lite
+model: gemini-3.5-flash-lite
+system_instruction_file: instructions/PEDA-instructions.md
+skills_dir: ./skills
+skills: []
+tools:
+  allowed:
+    - view_file
+    - create_file
+    - edit_file
+    - list_dir
+    - search_directory
+    - find_file
+  disabled:
+    - code_execution
+    - run_command
+    - terminal
+output_dir: outputs/pedagogical_design
+lifecycle: on_demand
+environment: shared

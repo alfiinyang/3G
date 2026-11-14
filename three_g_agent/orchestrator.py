@@ -1,13 +1,23 @@
 """Parent Orchestrator Agent for 3G-agent Architecture.
 
 STRICT ARCHITECTURAL PRINCIPLES:
-1. Brain (agent_config.model) = "3.1 flash lite" (gemini-3.1-flash-lite).
+1. Brain (agent_config.model) = "3.1 flash lite" (gemini-3.1-flash-lite) or remote orchestrator.
 2. Sole interface to the user; subagents remain internal.
-3. System prompt loaded from common directory (instructions/orch_instruction.md) in ANIR.
-4. Validates other agents' outputs against user requests before returning results.
-5. Hands over specific tasks to agents based on user requests.
-6. Subagents (designer and builder) are only spun up on-demand when user need demands them.
-7. All 3 agents share the exact same remote sandbox environment (EnvironmentStore).
+3. System prompt preloaded in remote environment (instructions/orch_instruction.md).
+4. Four agents: 1 Orchestrator + 3 Subagents:
+   - Pedagogy Engineer Subagent (PEDA): pedagogical curricula, objectives, rubrics
+   - Learning Experience Engineer Subagent (LX): learner journey, scenes, tasks, narrative
+   - Software Product Manager Subagent (PM): PRD, technical contracts, data models, state flow
+5. Validates subagents' outputs against user requests before returning results.
+6. Subagents are lazily spun up on-demand when user need demands them.
+7. All agents share the exact same remote sandbox environment (EnvironmentStore).
+   Once environment id is obtained from orchestrator after first turn, it persists across turns and agents.
+8. Turn ID continuity: every turn captures turn.id and saves it in TurnIdRegistry for that agent,
+   ensuring conversational continuity (previous_interaction_id = previous_turn.id) for:
+   - user <-> orchestrator
+   - orchestrator <-> pedagogy_engineer
+   - orchestrator <-> learning_experience_engineer
+   - orchestrator <-> software_product_manager
 """
 
 from __future__ import annotations
@@ -20,20 +30,30 @@ from typing import Any, Dict, List, Optional, Union
 
 from .agent import ThreeGAgent, ThreeGAgentResponse
 from .config import (
+    AGENT_LEARNING_EXPERIENCE,
+    AGENT_ORCHESTRATOR,
+    AGENT_PEDAGOGY,
+    AGENT_PRODUCT_MANAGER,
     MODEL_BUILDER,
     MODEL_DESIGNER,
     MODEL_ORCHESTRATOR,
     ThreeGAgentConfig,
     canonicalize_model_name,
+    resolve_lx_agent_id,
+    resolve_orchestrator_agent_id,
+    resolve_pedagogy_agent_id,
+    resolve_pm_agent_id,
 )
 from .environment import EnvironmentStore
 from .initializer import AgentClientInitializer, InitializedClient
+from .registry import TurnIdRegistry
 from .skills import SkillLoader
 from .status import TurnStatusReporter
 from .storage import FileStorageManager, SavedFile
 from .subagents import (
-    BuilderSubagent,
-    DesignerSubagent,
+    LearningExperienceSubagent,
+    PedagogySubagent,
+    ProductManagerSubagent,
     SubagentConfig,
     SubagentYamlLoader,
 )
@@ -65,6 +85,9 @@ class OrchestratorResponse:
     delegated_to: List[str]
     validations: List[ValidationResult] = field(default_factory=list)
     saved_files: List[SavedFile] = field(default_factory=list)
+    pedagogy_files: List[SavedFile] = field(default_factory=list)
+    lx_files: List[SavedFile] = field(default_factory=list)
+    pm_files: List[SavedFile] = field(default_factory=list)
     design_files: List[SavedFile] = field(default_factory=list)
     build_files: List[SavedFile] = field(default_factory=list)
 
@@ -75,9 +98,10 @@ class OrchestratorResponse:
 
 class ThreeGOrchestrator:
     """Parent Orchestrator Agent created with the current process.
-    
-    Coordinates the multi-agent system, lazily spinning up Designer and Builder
-    subagents only when the user's need demands them, and validating their outputs.
+
+    Coordinates the multi-agent system, lazily spinning up Pedagogy, Learning Experience,
+    and Product Manager subagents only when needed, maintaining shared environment persistence
+    and conversation continuity via TurnIdRegistry.
     """
 
     def __init__(
@@ -90,6 +114,7 @@ class ThreeGOrchestrator:
         output_dir: Union[str, Path] = "./outputs",
         state_dir: Union[str, Path] = "./.3g_agent",
         brain: str = MODEL_ORCHESTRATOR,
+        agent_id: Optional[str] = None,
     ) -> None:
         self.brain = brain
         self.skills_dir = Path(skills_dir)
@@ -97,25 +122,26 @@ class ThreeGOrchestrator:
         self.state_dir = Path(state_dir)
         self.subagents_dir = Path(subagents_dir)
 
-        # Common instructions resolution
+        # Instructions resolution
         self.instructions_file = Path(instructions_file) if instructions_file else None
         if self.instructions_file and not self.instructions_file.exists():
             for alt in [
                 Path("./instructions/orch_instruction.md"),
                 Path("./orch_instruction.md"),
-                Path("./instructions/orch_instruction"),
             ]:
                 if alt.exists():
                     self.instructions_file = alt
                     break
 
-        # Orchestrator Configuration: brain = 3.1 flash lite
+        resolved_agent_id = agent_id or resolve_orchestrator_agent_id()
+
+        # Orchestrator Configuration
         self.config = config or ThreeGAgentConfig(
-            agent_name="3G-orchestrator",
-            agent_id=canonicalize_model_name(brain),
+            agent_name=AGENT_ORCHESTRATOR,
+            agent_id=resolved_agent_id,
             model=brain,
             brain=brain,
-            skills_dir=None,  # Only designer agent needs custom skills
+            skills_dir=None,  # No skills employed
             instructions_file=self.instructions_file,
             output_dir=self.output_dir,
             state_dir=self.state_dir,
@@ -126,28 +152,30 @@ class ThreeGOrchestrator:
             self.config, interactive_prompt=False
         )
 
-        # All 3 agents share the exact same EnvironmentStore & remote environment_id
+        # Shared EnvironmentStore & TurnIdRegistry across all 4 agents
         self.environment = EnvironmentStore(
             state_dir=self.state_dir,
             agent_name=self.config.agent_name,
         )
-
+        self.turn_registry = TurnIdRegistry(state_dir=self.state_dir)
         self.storage = FileStorageManager(output_dir=self.output_dir)
 
         # Subagent instances are None initially: lazily spun up strictly on demand
-        self._designer_subagent: Optional[DesignerSubagent] = None
-        self._builder_subagent: Optional[BuilderSubagent] = None
+        self._pedagogy_subagent: Optional[PedagogySubagent] = None
+        self._lx_subagent: Optional[LearningExperienceSubagent] = None
+        self._pm_subagent: Optional[ProductManagerSubagent] = None
         self._subagent_yaml_specs: Dict[str, SubagentConfig] = {}
         self._load_yaml_specs()
 
-        # Internal parent agent instance for direct queries / synthesis
+        # Internal parent agent instance for user facade / synthesis
         self._agent = ThreeGAgent(
             config=self.config,
             initialized_client=self.client_handle,
             skill_loader=SkillLoader.empty(),
             environment_store=self.environment,
             storage_manager=self.storage,
-            load_local_context=True,
+            turn_registry=self.turn_registry,
+            load_local_context=False,
         )
 
     def _load_yaml_specs(self) -> None:
@@ -156,101 +184,192 @@ class ThreeGOrchestrator:
             self._subagent_yaml_specs = SubagentYamlLoader.load_all(self.subagents_dir)
 
     # -------------------------------------------------------------------------
-    # On-Demand Subagent Lifecycle Management
+    # On-Demand Subagent Lifecycle Management (3 Subagents)
     # -------------------------------------------------------------------------
 
-    def get_designer_subagent(self) -> DesignerSubagent:
-        """Spins up the Designer Subagent strictly when educational design is needed."""
-        if self._designer_subagent is None:
-            logger.info("Spinting up Designer Subagent on demand (brain: %s)...", MODEL_DESIGNER)
-            desi_yaml = self._subagent_yaml_specs.get("designer")
-            instr_file = desi_yaml.system_instruction_file if desi_yaml else Path("./instructions/desi_instructions.md")
-            skills_dir = desi_yaml.skills_dir if desi_yaml and desi_yaml.skills_dir else self.skills_dir
-            out_dir = desi_yaml.output_dir if desi_yaml else self.output_dir / "design"
+    def get_pedagogy_subagent(self) -> PedagogySubagent:
+        """Spins up the Pedagogy Engineering Subagent strictly when needed."""
+        if self._pedagogy_subagent is None:
+            logger.info("Spinning up Pedagogy Subagent on demand...")
+            yaml_spec = (
+                self._subagent_yaml_specs.get("pedagogy_engineer")
+                or self._subagent_yaml_specs.get("pedagogy")
+                or self._subagent_yaml_specs.get("designer")
+            )
+            instr_file = (
+                yaml_spec.system_instruction_file
+                if yaml_spec and yaml_spec.system_instruction_file
+                else Path("./instructions/PEDA-instructions.md")
+            )
+            out_dir = (
+                yaml_spec.output_dir
+                if yaml_spec and yaml_spec.output_dir
+                else self.output_dir / "pedagogical_design"
+            )
 
-            self._designer_subagent = DesignerSubagent(
+            self._pedagogy_subagent = PedagogySubagent(
                 environment_store=self.environment,  # Shared environment
                 client_handle=self.client_handle,
-                skills_dir=skills_dir,
+                turn_registry=self.turn_registry,    # Shared TurnIdRegistry
+                skills_dir=self.skills_dir,
                 instructions_file=instr_file,
                 output_dir=out_dir,
                 state_dir=self.state_dir,
-                brain=desi_yaml.brain if desi_yaml else MODEL_DESIGNER,
+                brain=yaml_spec.brain if yaml_spec and yaml_spec.brain else MODEL_DESIGNER,
+                agent_id=resolve_pedagogy_agent_id(),
             )
-        return self._designer_subagent
+        return self._pedagogy_subagent
 
-    def get_builder_subagent(self) -> BuilderSubagent:
-        """Spins up the Builder Subagent strictly when it is time to build."""
-        if self._builder_subagent is None:
-            logger.info("Spinning up Builder Subagent on demand (brain: %s)...", MODEL_BUILDER)
-            build_yaml = self._subagent_yaml_specs.get("builder")
-            out_dir = build_yaml.output_dir if build_yaml else self.output_dir / "build"
+    def get_learning_experience_subagent(self) -> LearningExperienceSubagent:
+        """Spins up the Learning Experience Subagent strictly when needed."""
+        if self._lx_subagent is None:
+            logger.info("Spinning up Learning Experience Subagent on demand...")
+            yaml_spec = (
+                self._subagent_yaml_specs.get("learning_experience_engineer")
+                or self._subagent_yaml_specs.get("learning_experience")
+                or self._subagent_yaml_specs.get("lx")
+            )
+            instr_file = (
+                yaml_spec.system_instruction_file
+                if yaml_spec and yaml_spec.system_instruction_file
+                else Path("./instructions/LX-instructions.md")
+            )
+            out_dir = (
+                yaml_spec.output_dir
+                if yaml_spec and yaml_spec.output_dir
+                else self.output_dir / "learning_experience_design"
+            )
 
-            self._builder_subagent = BuilderSubagent(
+            self._lx_subagent = LearningExperienceSubagent(
                 environment_store=self.environment,  # Shared environment
                 client_handle=self.client_handle,
+                turn_registry=self.turn_registry,    # Shared TurnIdRegistry
+                skills_dir=self.skills_dir,
+                instructions_file=instr_file,
                 output_dir=out_dir,
                 state_dir=self.state_dir,
-                brain=build_yaml.brain if build_yaml else MODEL_BUILDER,
+                brain=yaml_spec.brain if yaml_spec and yaml_spec.brain else MODEL_DESIGNER,
+                agent_id=resolve_lx_agent_id(),
             )
-        return self._builder_subagent
+        return self._lx_subagent
+
+    def get_product_manager_subagent(self) -> ProductManagerSubagent:
+        """Spins up the Software Product Manager Subagent strictly when needed."""
+        if self._pm_subagent is None:
+            logger.info("Spinning up Software Product Manager Subagent on demand...")
+            yaml_spec = (
+                self._subagent_yaml_specs.get("software_product_manager")
+                or self._subagent_yaml_specs.get("product_manager")
+                or self._subagent_yaml_specs.get("pm")
+                or self._subagent_yaml_specs.get("builder")
+            )
+            instr_file = (
+                yaml_spec.system_instruction_file
+                if yaml_spec and yaml_spec.system_instruction_file
+                else Path("./instructions/PM-instructions.md")
+            )
+            out_dir = (
+                yaml_spec.output_dir
+                if yaml_spec and yaml_spec.output_dir
+                else self.output_dir / "product_requirements"
+            )
+
+            self._pm_subagent = ProductManagerSubagent(
+                environment_store=self.environment,  # Shared environment
+                client_handle=self.client_handle,
+                turn_registry=self.turn_registry,    # Shared TurnIdRegistry
+                skills_dir=self.skills_dir,
+                instructions_file=instr_file,
+                output_dir=out_dir,
+                state_dir=self.state_dir,
+                brain=yaml_spec.brain if yaml_spec and yaml_spec.brain else MODEL_BUILDER,
+                agent_id=resolve_pm_agent_id(),
+            )
+        return self._pm_subagent
+
+    # Backward compatibility accessors
+    def get_designer_subagent(self) -> PedagogySubagent:
+        return self.get_pedagogy_subagent()
+
+    def get_builder_subagent(self) -> ProductManagerSubagent:
+        return self.get_product_manager_subagent()
+
+    @property
+    def is_pedagogy_spun_up(self) -> bool:
+        return self._pedagogy_subagent is not None
 
     @property
     def is_designer_spun_up(self) -> bool:
-        """Returns True if the designer subagent has been created in this process."""
-        return self._designer_subagent is not None
+        return self.is_pedagogy_spun_up
+
+    @property
+    def is_learning_experience_spun_up(self) -> bool:
+        return self._lx_subagent is not None
+
+    @property
+    def is_lx_spun_up(self) -> bool:
+        return self.is_learning_experience_spun_up
+
+    @property
+    def is_product_manager_spun_up(self) -> bool:
+        return self._pm_subagent is not None
 
     @property
     def is_builder_spun_up(self) -> bool:
-        """Returns True if the builder subagent has been created in this process."""
-        return self._builder_subagent is not None
+        return self.is_product_manager_spun_up
 
     # -------------------------------------------------------------------------
     # Intent Routing & Task Handover
     # -------------------------------------------------------------------------
 
     def classify_intent(self, prompt: str) -> str:
-        """Classifies user request into 'design', 'build', 'hybrid', or 'direct'."""
+        """Classifies user request into 'pedagogy', 'lx', 'pm', 'pipeline', or 'direct'."""
         lower = prompt.lower()
 
-        # Pedagogical / design markers
-        design_patterns = [
-            r"\bpedagog",
-            r"\bcurricul",
-            r"\blearning objective",
-            r"\blesson plan",
-            r"\brubric",
-            r"\binstructional",
-            r"\bstage\s*[0-4]\b",
-            r"\bsyllabus",
-            r"\bteach",
-            r"\btraining program",
-            r"\beducation",
-        ]
-        has_design = any(re.search(pat, lower) for pat in design_patterns)
+        is_peda = any(
+            re.search(pat, lower)
+            for pat in [
+                r"\bpedagog", r"\bcurricul", r"\blearning objective", r"\brubric",
+                r"\binstructional", r"\bsyllabus", r"\bteach", r"\btraining program",
+                r"\bbloom", r"\bstage_0", r"\bstage_1",
+            ]
+        )
 
-        # Code / build markers
-        build_patterns = [
-            r"\bcode\b",
-            r"\bbuild\b",
-            r"\bimplement",
-            r"\bpython\s*(?:script|code|file)",
-            r"\bprototype\b",
-            r"\brun(?:nable)?\b",
-            r"\bprogram\b",
-            r"\bscript\b",
-            r"\bconstruct\b",
-            r"\bcompile\b",
-            r"\bexecution\b",
-        ]
-        has_build = any(re.search(pat, lower) for pat in build_patterns)
+        is_lx = any(
+            re.search(pat, lower)
+            for pat in [
+                r"\blearner experience", r"\blearning experience\b", r"\blx\b",
+                r"\bnarrative\b", r"\bscene", r"\bjourney", r"\bcharacter",
+                r"\bgame world", r"\bfeedback message", r"\binteraction context",
+            ]
+        )
 
-        if has_design and has_build:
-            return "hybrid"
-        elif has_design:
-            return "design"
-        elif has_build:
-            return "build"
+        is_pm = any(
+            re.search(pat, lower)
+            for pat in [
+                r"\bprd\b", r"\bproduct requirement", r"\bsoftware requirement",
+                r"\btechnical architecture", r"\bdata model", r"\bacceptance criteria",
+                r"\bfunctional requirement", r"\bbuild\b", r"\bcode\b", r"\bimplement",
+                r"\bprototype\b", r"\bstate machine", r"\bgame flow",
+            ]
+        )
+
+        # If user asks for full end-to-end game generator or multiple stages:
+        if (is_peda and is_lx) or (is_peda and is_pm) or (is_lx and is_pm) or "full pipeline" in lower or "end-to-end" in lower:
+            return "pipeline"
+        elif is_peda:
+            return "pedagogy"
+        elif is_lx:
+            return "lx"
+        elif is_pm:
+            return "pm"
+
+        # Backward compatibility aliases
+        if "design" in lower and not is_pm:
+            return "pedagogy"
+        if "build" in lower and not is_peda:
+            return "pm"
+
         return "direct"
 
     # -------------------------------------------------------------------------
@@ -269,56 +388,51 @@ class ThreeGOrchestrator:
         text = subagent_response.output_text or ""
         files = subagent_response.saved_files
 
-        if agent_type == "designer":
-            target_dir = "outputs/design"
-            # 1. Output non-empty
+        # Normalize agent_type
+        if agent_type in ("pedagogy", "pedagogy_engineer", "designer"):
+            target_dir = "outputs/pedagogical_design"
             checks["non_empty"] = len(text.strip()) > 0
             if not checks["non_empty"]:
-                reasons.append("Designer output text is empty")
+                reasons.append("Pedagogy output text is empty")
 
-            # 2. Files saved to outputs/design
-            checks["saved_to_design_dir"] = all(
-                "design" in str(f.local_path).replace("\\", "/") for f in files
-            ) if files else True
-            if not checks["saved_to_design_dir"]:
-                reasons.append("Deliverables were not saved to outputs/design directory")
-
-            # 3. Adherence to non-executable policy (no game engine or executable code)
             forbidden_code_markers = ["pygame.init()", "pygame.display", "import unity", "def run_game("]
             has_forbidden_code = any(m in text for m in forbidden_code_markers)
             checks["avoided_executable_game_code"] = not has_forbidden_code
             if has_forbidden_code:
-                reasons.append("Designer produced forbidden executable game simulation code")
+                reasons.append("Pedagogy subagent produced forbidden executable game simulation code")
 
-            # 4. Contains pedagogical structures if requested
-            if any(k in user_prompt.lower() for k in ("objective", "curriculum", "rubric", "plan")):
-                checks["pedagogical_content"] = any(
-                    w in text.lower() for w in ("objective", "curriculum", "rubric", "stage", "pedagog", "learning")
-                )
-                if not checks["pedagogical_content"]:
-                    reasons.append("Designer response missing requested pedagogical structural elements")
+            checks["has_deliverable_or_structure"] = (
+                len(files) > 0
+                or any(w in text.lower() for w in ("objective", "curriculum", "rubric", "stage", "pedagog", "learning"))
+            )
+            if not checks["has_deliverable_or_structure"]:
+                reasons.append("Pedagogy response missing pedagogical structural elements")
 
-        elif agent_type == "builder":
-            target_dir = "outputs/build"
-            # 1. Output non-empty
+        elif agent_type in ("lx", "learning_experience", "learning_experience_engineer"):
+            target_dir = "outputs/learning_experience_design"
             checks["non_empty"] = len(text.strip()) > 0
             if not checks["non_empty"]:
-                reasons.append("Builder output text is empty")
+                reasons.append("Learning Experience output text is empty")
 
-            # 2. Files saved to outputs/build
-            checks["saved_to_build_dir"] = all(
-                "build" in str(f.local_path).replace("\\", "/") for f in files
-            ) if files else True
-            if not checks["saved_to_build_dir"]:
-                reasons.append("Deliverables were not saved to outputs/build directory")
+            checks["has_experience_elements"] = (
+                len(files) > 0
+                or any(w in text.lower() for w in ("scene", "journey", "narrative", "task", "learner", "experience"))
+            )
+            if not checks["has_experience_elements"]:
+                reasons.append("LX response missing expected learner-experience specifications")
 
-            # 3. Code deliverables check
-            if any(k in user_prompt.lower() for k in ("code", "python", "script", "prototype", "implement")):
-                checks["contains_code_deliverable"] = (
-                    len(files) > 0 or "```python" in text or "```" in text or "def " in text or "class " in text
-                )
-                if not checks["contains_code_deliverable"]:
-                    reasons.append("Builder output lacks code implementation or executable deliverables")
+        elif agent_type in ("pm", "product_manager", "software_product_manager", "builder"):
+            target_dir = "outputs/product_requirements"
+            checks["non_empty"] = len(text.strip()) > 0
+            if not checks["non_empty"]:
+                reasons.append("Product Manager output text is empty")
+
+            checks["has_prd_or_req_elements"] = (
+                len(files) > 0
+                or any(w in text.lower() for w in ("prd", "requirement", "functional", "acceptance", "architecture", "state", "ui"))
+            )
+            if not checks["has_prd_or_req_elements"]:
+                reasons.append("PM response lacks PRD specifications or acceptance criteria")
 
         else:
             target_dir = "outputs"
@@ -346,13 +460,14 @@ class ThreeGOrchestrator:
         show_status: bool = True,
     ) -> OrchestratorResponse:
         """Executes a user request through the multi-agent architecture.
-        
+
         Orchestration Steps:
-        1. Classifies user requirement (design, build, hybrid, or direct).
-        2. Lazily spins up the demanded subagent (designer or builder).
-        3. Executes the subagent operation using the shared environment container.
-        4. Validates the subagent output against user constraints.
-        5. Synthesizes and delivers verified results to the user with local file links.
+        1. Classifies user requirement (pedagogy, lx, pm, pipeline, or direct).
+        2. Lazily spins up demanded subagents.
+        3. Executes subagents sharing the exact same EnvironmentStore container.
+        4. Maintains per-agent conversational continuity via TurnIdRegistry.
+        5. Validates subagent outputs against user constraints.
+        6. Synthesizes and delivers verified results to the user with clickable file links.
         """
         reporter = status_reporter or TurnStatusReporter(enabled=show_status)
         reporter.start("Orchestrating", "Analyzing user request and coordinating agents...")
@@ -363,120 +478,153 @@ class ThreeGOrchestrator:
         delegated_to: List[str] = []
         validations: List[ValidationResult] = []
         all_saved_files: List[SavedFile] = []
-        design_files: List[SavedFile] = []
-        build_files: List[SavedFile] = []
+        pedagogy_files: List[SavedFile] = []
+        lx_files: List[SavedFile] = []
+        pm_files: List[SavedFile] = []
         final_text_parts: List[str] = []
 
         active_env_id = self.environment.get_environment_id() or "env_shared"
 
         # -------------------------------------------------------------
-        # Branch 1: DESIGN Task
+        # Branch 1: PEDAGOGY Task
         # -------------------------------------------------------------
-        if task_type == "design":
-            delegated_to.append("designer")
-            reporter.thinking("Delegating pedagogical design to Designer Subagent (3.5 flash lite)...")
-            designer = self.get_designer_subagent()
-            desi_resp = designer.execute(prompt=prompt, status_reporter=reporter, show_status=show_status)
+        if task_type in ("pedagogy", "design"):
+            delegated_to.append(AGENT_PEDAGOGY)
+            reporter.thinking("Delegating to Pedagogy Engineer Subagent (PEDA)...")
+            pedagogy = self.get_pedagogy_subagent()
+            resp = pedagogy.execute(prompt=prompt, status_reporter=reporter, show_status=show_status)
 
-            # Validate designer output
-            val = self.validate_output(prompt, desi_resp, "designer")
+            val = self.validate_output(prompt, resp, "pedagogy")
             validations.append(val)
-            active_env_id = desi_resp.environment_id or active_env_id
-            design_files.extend(desi_resp.saved_files)
-            all_saved_files.extend(desi_resp.saved_files)
-
-            final_text_parts.append(desi_resp.output_text)
-            if not val.is_valid:
-                logger.warning("Designer validation note: %s", val.summary())
+            active_env_id = resp.environment_id or active_env_id
+            pedagogy_files.extend(resp.saved_files)
+            all_saved_files.extend(resp.saved_files)
+            final_text_parts.append(resp.output_text)
 
         # -------------------------------------------------------------
-        # Branch 2: BUILD Task
+        # Branch 2: LEARNING EXPERIENCE (LX) Task
         # -------------------------------------------------------------
-        elif task_type == "build":
-            delegated_to.append("builder")
-            reporter.thinking("Delegating code construction to Builder Subagent (3.8 flash)...")
-            builder = self.get_builder_subagent()
-            build_resp = builder.execute(prompt=prompt, status_reporter=reporter, show_status=show_status)
+        elif task_type in ("lx", "learning_experience"):
+            delegated_to.append(AGENT_LEARNING_EXPERIENCE)
+            reporter.thinking("Delegating to Learning Experience Subagent (LX)...")
+            lx = self.get_learning_experience_subagent()
+            resp = lx.execute(prompt=prompt, status_reporter=reporter, show_status=show_status)
 
-            # Validate builder output
-            val = self.validate_output(prompt, build_resp, "builder")
+            val = self.validate_output(prompt, resp, "lx")
             validations.append(val)
-            active_env_id = build_resp.environment_id or active_env_id
-            build_files.extend(build_resp.saved_files)
-            all_saved_files.extend(build_resp.saved_files)
-
-            final_text_parts.append(build_resp.output_text)
-            if not val.is_valid:
-                logger.warning("Builder validation note: %s", val.summary())
+            active_env_id = resp.environment_id or active_env_id
+            lx_files.extend(resp.saved_files)
+            all_saved_files.extend(resp.saved_files)
+            final_text_parts.append(resp.output_text)
 
         # -------------------------------------------------------------
-        # Branch 3: HYBRID Task (Design First -> Then Build)
+        # Branch 3: PRODUCT MANAGER (PM / RT) Task
         # -------------------------------------------------------------
-        elif task_type == "hybrid":
-            # Step A: Designer
-            delegated_to.append("designer")
-            reporter.thinking("[1/2] Handing pedagogical design to Designer Subagent (3.5 flash lite)...")
-            designer = self.get_designer_subagent()
-            desi_resp = designer.execute(
+        elif task_type in ("pm", "product_manager", "build"):
+            delegated_to.append(AGENT_PRODUCT_MANAGER)
+            reporter.thinking("Delegating to Software Product Manager Subagent (PM)...")
+            pm = self.get_product_manager_subagent()
+            resp = pm.execute(prompt=prompt, status_reporter=reporter, show_status=show_status)
+
+            val = self.validate_output(prompt, resp, "pm")
+            validations.append(val)
+            active_env_id = resp.environment_id or active_env_id
+            pm_files.extend(resp.saved_files)
+            all_saved_files.extend(resp.saved_files)
+            final_text_parts.append(resp.output_text)
+
+        # -------------------------------------------------------------
+        # Branch 4: FULL PIPELINE (PEDA -> LX -> PM)
+        # -------------------------------------------------------------
+        elif task_type in ("pipeline", "hybrid"):
+            # Step 1: Pedagogy Engineer
+            delegated_to.append(AGENT_PEDAGOGY)
+            reporter.thinking("[1/3] Step 1: Pedagogy Engineer Subagent (PEDA)...")
+            pedagogy = self.get_pedagogy_subagent()
+            peda_resp = pedagogy.execute(
                 prompt=f"Create complete pedagogical curriculum specification for: {prompt}",
                 status_reporter=reporter,
                 show_status=show_status,
             )
-            val_desi = self.validate_output(prompt, desi_resp, "designer")
-            validations.append(val_desi)
-            design_files.extend(desi_resp.saved_files)
-            all_saved_files.extend(desi_resp.saved_files)
-            active_env_id = desi_resp.environment_id or active_env_id
+            val_peda = self.validate_output(prompt, peda_resp, "pedagogy")
+            validations.append(val_peda)
+            pedagogy_files.extend(peda_resp.saved_files)
+            all_saved_files.extend(peda_resp.saved_files)
+            active_env_id = peda_resp.environment_id or active_env_id
 
-            # Step B: Builder (Called only when it is time to build)
-            delegated_to.append("builder")
-            reporter.thinking("[2/2] Handing implementation to Builder Subagent (3.8 flash)...")
-            builder = self.get_builder_subagent()
-            build_prompt = (
-                f"Implement executable software components based on the verified design specifications.\n\n"
-                f"Original User Request: {prompt}\n\n"
-                f"Design Specification:\n{desi_resp.output_text[:2000]}"
+            # Step 2: Learning Experience Engineer
+            delegated_to.append(AGENT_LEARNING_EXPERIENCE)
+            reporter.thinking("[2/3] Step 2: Learning Experience Subagent (LX)...")
+            lx = self.get_learning_experience_subagent()
+            lx_prompt = (
+                f"Design the complete Learner-Experience Specification based on the pedagogical plan.\n\n"
+                f"User Request: {prompt}\n\n"
+                f"Pedagogical Plan:\n{peda_resp.output_text[:3000]}"
             )
-            build_resp = builder.execute(
-                prompt=build_prompt,
+            lx_resp = lx.execute(
+                prompt=lx_prompt,
                 status_reporter=reporter,
                 show_status=show_status,
             )
-            val_build = self.validate_output(prompt, build_resp, "builder")
-            validations.append(val_build)
-            build_files.extend(build_resp.saved_files)
-            all_saved_files.extend(build_resp.saved_files)
-            active_env_id = build_resp.environment_id or active_env_id
+            val_lx = self.validate_output(prompt, lx_resp, "lx")
+            validations.append(val_lx)
+            lx_files.extend(lx_resp.saved_files)
+            all_saved_files.extend(lx_resp.saved_files)
+            active_env_id = lx_resp.environment_id or active_env_id
 
-            final_text_parts.append("### Pedagogical Design Specifications (Designer Subagent - 3.5 flash lite)")
-            final_text_parts.append(desi_resp.output_text)
-            final_text_parts.append("\n---\n### Executable Implementation (Builder Subagent - 3.8 flash)")
-            final_text_parts.append(build_resp.output_text)
+            # Step 3: Software Product Manager
+            delegated_to.append(AGENT_PRODUCT_MANAGER)
+            reporter.thinking("[3/3] Step 3: Software Product Manager Subagent (PM)...")
+            pm = self.get_product_manager_subagent()
+            pm_prompt = (
+                f"Produce implementation-ready Software Product Requirements Document (PRD).\n\n"
+                f"User Request: {prompt}\n\n"
+                f"Learner-Experience Specification:\n{lx_resp.output_text[:3000]}"
+            )
+            pm_resp = pm.execute(
+                prompt=pm_prompt,
+                status_reporter=reporter,
+                show_status=show_status,
+            )
+            val_pm = self.validate_output(prompt, pm_resp, "pm")
+            validations.append(val_pm)
+            pm_files.extend(pm_resp.saved_files)
+            all_saved_files.extend(pm_resp.saved_files)
+            active_env_id = pm_resp.environment_id or active_env_id
+
+            final_text_parts.append("### 1. Pedagogical Architecture (PEDA Subagent)")
+            final_text_parts.append(peda_resp.output_text)
+            final_text_parts.append("\n---\n### 2. Learner-Experience Specification (LX Subagent)")
+            final_text_parts.append(lx_resp.output_text)
+            final_text_parts.append("\n---\n### 3. Software Engineering PRD (PM Subagent)")
+            final_text_parts.append(pm_resp.output_text)
 
         # -------------------------------------------------------------
-        # Branch 4: DIRECT Query (Handled directly by Orchestrator)
+        # Branch 5: DIRECT Query (Handled directly by Orchestrator)
         # -------------------------------------------------------------
         else:
-            delegated_to.append("orchestrator")
-            reporter.thinking("Resolving query directly via Orchestrator (3.1 flash lite)...")
+            delegated_to.append(AGENT_ORCHESTRATOR)
+            reporter.thinking("Resolving query directly via Orchestrator...")
             orch_resp = self._agent.execute(prompt=prompt, status_reporter=reporter, show_status=show_status)
             active_env_id = orch_resp.environment_id or active_env_id
             all_saved_files.extend(orch_resp.saved_files)
             final_text_parts.append(orch_resp.output_text)
 
-        # -------------------------------------------------------------
-        # Append Deliverable Links & Validation Badges
-        # -------------------------------------------------------------
+        # Deliverable links section
         if all_saved_files:
             file_sections: List[str] = ["\n\n### Verified Deliverables"]
-            if design_files:
-                file_sections.append("**Design Deliverables (`outputs/design`):**")
-                for df in design_files:
-                    file_sections.append(f"- [{df.file_name}]({df.file_uri}) ({df.size_bytes} bytes)")
-            if build_files:
-                file_sections.append("**Build Deliverables (`outputs/build`):**")
-                for bf in build_files:
-                    file_sections.append(f"- [{bf.file_name}]({bf.file_uri}) ({bf.size_bytes} bytes)")
+            if pedagogy_files:
+                file_sections.append("**Pedagogy Deliverables (`outputs/pedagogical_design`):**")
+                for f in pedagogy_files:
+                    file_sections.append(f"- [{f.file_name}]({f.file_uri}) ({f.size_bytes} bytes)")
+            if lx_files:
+                file_sections.append("**Learning Experience Deliverables (`outputs/learning_experience_design`):**")
+                for f in lx_files:
+                    file_sections.append(f"- [{f.file_name}]({f.file_uri}) ({f.size_bytes} bytes)")
+            if pm_files:
+                file_sections.append("**Product Management Deliverables (`outputs/product_requirements`):**")
+                for f in pm_files:
+                    file_sections.append(f"- [{f.file_name}]({f.file_uri}) ({f.size_bytes} bytes)")
             final_text_parts.append("\n".join(file_sections))
 
         reporter.complete(f"Task completed ({task_type}) across {len(delegated_to)} agent(s)")
@@ -488,6 +636,9 @@ class ThreeGOrchestrator:
             delegated_to=delegated_to,
             validations=validations,
             saved_files=all_saved_files,
-            design_files=design_files,
-            build_files=build_files,
+            pedagogy_files=pedagogy_files,
+            lx_files=lx_files,
+            pm_files=pm_files,
+            design_files=pedagogy_files,
+            build_files=pm_files,
         )

@@ -10,6 +10,10 @@ Provides an autonomous agent using the Antigravity SDK with:
 
 from .agent import ThreeGAgent, ThreeGAgentResponse, extract_interaction_text
 from .config import (
+    AGENT_LEARNING_EXPERIENCE,
+    AGENT_ORCHESTRATOR,
+    AGENT_PEDAGOGY,
+    AGENT_PRODUCT_MANAGER,
     MODEL_BUILDER,
     MODEL_DESIGNER,
     MODEL_ORCHESTRATOR,
@@ -17,19 +21,36 @@ from .config import (
     ThreeGAgentConfig,
     canonicalize_model_name,
     resolve_default_agent_id,
+    resolve_lx_agent_id,
+    resolve_orchestrator_agent_id,
+    resolve_pedagogy_agent_id,
+    resolve_pm_agent_id,
 )
 from .creator import AgentCreationResult, AgentCreationSpec, AgentCreator
 from .deletion import AgentDeletionManager, DeletionResult
 from .environment import EnvironmentState, EnvironmentStore
 from .initializer import AgentClientInitializer, InitializedClient, ModelInitializer
 from .orchestrator import OrchestratorResponse, ThreeGOrchestrator, ValidationResult
-from .registry import AgentRegistry, ConversationSession, SessionRegistry, validate_agent_id
+from .registry import (
+    AgentRegistry,
+    AgentTurnRecord,
+    ConversationSession,
+    SessionRegistry,
+    TurnIdRegistry,
+    validate_agent_id,
+)
 from .skills import Skill, SkillFile, SkillLoader
 from .status import TurnStatusReporter
 from .storage import FileStorageManager, SavedFile
 from .subagents import (
     BuilderSubagent,
     DesignerSubagent,
+    LXSubagent,
+    LearningExperienceSubagent,
+    PedagogyEngineerSubagent,
+    PedagogySubagent,
+    ProductManagerSubagent,
+    SoftwareProductManagerSubagent,
     SubagentConfig,
     SubagentYamlLoader,
 )
@@ -42,10 +63,24 @@ __all__ = [
     "ThreeGOrchestrator",
     "OrchestratorResponse",
     "ValidationResult",
+    "PedagogySubagent",
+    "PedagogyEngineerSubagent",
+    "LearningExperienceSubagent",
+    "LXSubagent",
+    "ProductManagerSubagent",
+    "SoftwareProductManagerSubagent",
     "DesignerSubagent",
     "BuilderSubagent",
     "SubagentConfig",
     "SubagentYamlLoader",
+    "AGENT_ORCHESTRATOR",
+    "AGENT_PEDAGOGY",
+    "AGENT_LEARNING_EXPERIENCE",
+    "AGENT_PRODUCT_MANAGER",
+    "resolve_orchestrator_agent_id",
+    "resolve_pedagogy_agent_id",
+    "resolve_lx_agent_id",
+    "resolve_pm_agent_id",
     "MODEL_ORCHESTRATOR",
     "MODEL_DESIGNER",
     "MODEL_BUILDER",
@@ -59,6 +94,8 @@ __all__ = [
     "AgentCreationResult",
     "AgentRegistry",
     "SessionRegistry",
+    "TurnIdRegistry",
+    "AgentTurnRecord",
     "ConversationSession",
     "validate_agent_id",
     "AgentDeletionManager",
@@ -74,5 +111,5 @@ __all__ = [
     "resolve_default_agent_id",
 ]
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 

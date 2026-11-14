@@ -307,3 +307,155 @@ class SessionRegistry:
 
 # Backward-compatible alias
 AgentRegistry = SessionRegistry
+
+
+@dataclass
+class AgentTurnRecord:
+    """Record of conversation turn IDs and continuity metadata for an agent."""
+    agent_name: str
+    last_turn_id: Optional[str] = None
+    turn_count: int = 0
+    history: List[str] = field(default_factory=list)
+    updated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> AgentTurnRecord:
+        return cls(**data)
+
+
+class TurnIdRegistry:
+    """Registry maintaining conversational continuity turn IDs for each agent.
+
+    Ensures:
+    - Continuity between User and Orchestrator
+    - Continuity between Orchestrator and Pedagogy Engineer
+    - Continuity between Orchestrator and Learning Experience Engineer
+    - Continuity between Orchestrator and Software Product Manager
+
+    The registry always points to the last saved turn.id for each agent,
+    which is passed as previous_interaction_id=previous_turn.id in the next turn.
+    """
+
+    def __init__(self, state_dir: Union[str, Path] = "./.3g_agent") -> None:
+        self.state_dir = Path(state_dir)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.registry_file = self.state_dir / "turn_id_registry.json"
+        self._ensure_file()
+
+    def _ensure_file(self) -> None:
+        if not self.registry_file.exists():
+            default_data = {
+                "version": "1.0",
+                "agents": {},
+            }
+            self._save_raw(default_data)
+
+    def _load_raw(self) -> Dict[str, Any]:
+        try:
+            return json.loads(self.registry_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Error reading turn_id_registry file: %s. Reinitializing.", e)
+            return {"version": "1.0", "agents": {}}
+
+    def _save_raw(self, data: Dict[str, Any]) -> None:
+        temp_file = self.state_dir / "turn_id_registry.tmp"
+        temp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        temp_file.replace(self.registry_file)
+
+    def get_last_turn_id(self, agent_name: str) -> Optional[str]:
+        """Returns the last saved turn ID (turn.id) for the specified agent conversation.
+
+        The registry always points to the last saved ID when continuing a conversation.
+        """
+        record = self.get_turn_record(agent_name)
+        if record and record.last_turn_id:
+            return record.last_turn_id
+        return None
+
+    def save_turn_id(
+        self,
+        agent_name: str,
+        turn_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AgentTurnRecord:
+        """Captures and stores the turn ID for the specified agent.
+
+        Args:
+            agent_name: Canonical name of the agent (e.g. 'orchestrator', 'pedagogy_engineer').
+            turn_id: The unique turn/interaction ID returned by the Antigravity SDK.
+            metadata: Optional additional turn context or prompt snippets.
+
+        Returns:
+            The updated AgentTurnRecord.
+        """
+        raw = self._load_raw()
+        agents = raw.setdefault("agents", {})
+
+        agent_data = agents.get(agent_name)
+        now_str = datetime.now().isoformat()
+
+        if agent_data:
+            record = AgentTurnRecord.from_dict(agent_data)
+            record.last_turn_id = turn_id
+            record.turn_count += 1
+            if turn_id not in record.history:
+                record.history.append(turn_id)
+            record.updated_at = now_str
+            if metadata:
+                record.metadata.update(metadata)
+        else:
+            record = AgentTurnRecord(
+                agent_name=agent_name,
+                last_turn_id=turn_id,
+                turn_count=1,
+                history=[turn_id],
+                updated_at=now_str,
+                metadata=metadata or {},
+            )
+
+        agents[agent_name] = record.to_dict()
+        self._save_raw(raw)
+        logger.info(
+            "TurnIdRegistry: Saved turn.id '%s' for agent '%s' (turn %d)",
+            turn_id,
+            agent_name,
+            record.turn_count,
+        )
+        return record
+
+    def get_turn_record(self, agent_name: str) -> Optional[AgentTurnRecord]:
+        """Retrieves the full AgentTurnRecord for the specified agent."""
+        raw = self._load_raw()
+        agent_data = raw.get("agents", {}).get(agent_name)
+        if agent_data:
+            return AgentTurnRecord.from_dict(agent_data)
+        return None
+
+    def get_all_records(self) -> Dict[str, AgentTurnRecord]:
+        """Retrieves all agent turn records mapped by agent name."""
+        raw = self._load_raw()
+        results: Dict[str, AgentTurnRecord] = {}
+        for name, data in raw.get("agents", {}).items():
+            try:
+                results[name] = AgentTurnRecord.from_dict(data)
+            except Exception:
+                pass
+        return results
+
+    def reset_agent(self, agent_name: str) -> None:
+        """Resets the turn history for a single agent conversation."""
+        raw = self._load_raw()
+        agents = raw.get("agents", {})
+        if agent_name in agents:
+            del agents[agent_name]
+            self._save_raw(raw)
+            logger.info("TurnIdRegistry: Cleared turn history for agent '%s'", agent_name)
+
+    def reset_all(self) -> None:
+        """Resets turn history across all agents."""
+        self._save_raw({"version": "1.0", "agents": {}})
+        logger.info("TurnIdRegistry: Cleared turn history across all agents")
