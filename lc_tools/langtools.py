@@ -43,6 +43,14 @@ class SubAgentSummary(BaseModel):
 def _resolve(path: str) -> Path:
     return Path(path).expanduser().resolve()
 
+def load_instruction_file(file_path: str) -> str:
+    """Loads the text content of a system prompt or instruction file."""
+    import os
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Instruction file not found at {file_path}")
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
+
 
 @tool(
     "create_file",
