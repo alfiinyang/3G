@@ -12,11 +12,32 @@ from __future__ import annotations
 
 import fnmatch
 from pathlib import Path
+from ast import Dict
+from typing import List
 
 from langchain.tools import tool
+from pydantic import BaseModel, Field
 
 MAX_READ_CHARS = 100_000
 MAX_SEARCH_RESULTS = 200
+
+class SubAgentSummary(BaseModel):
+    """
+    Pydantic schema representing the structured summary returned by specialized sub-agents.
+    
+    This schema ensures that communication between coordinates is strictly structured,
+    omitting conversational noise or raw file outputs in favor of programmatic tracking.
+    
+    Attributes:
+        filepaths (List[str]): Paths to any code, specifications, or artifacts updated.
+        bullet_points (List[str]): High-level overview of critical decisions or progress.
+        status (str): Current execution state indicating success, in-progress, or failure.
+        commentary (str): Brief contextual notes or next steps strictly constrained in length.
+    """
+    filepaths: List[str] = Field(description="List of exact filepaths created or modified.")
+    bullet_points: List[str] = Field(description="Concise bullet points highlighting key elements of actions and content.")
+    status: str = Field(description="Current status of the action (e.g., 'COMPLETE', 'IN_PROGRESS', 'FAILED').")
+    commentary: str = Field(description="Additional short summary or next steps (strictly under 50 words).")
 
 
 def _resolve(path: str) -> Path:
@@ -231,3 +252,16 @@ def search_directory(
 
 TOOLS = [create_file, read_file, edit_file, list_directory, search_directory]
 
+def format_input(query: str) -> dict:
+  """
+  Prepares and formats a raw user input query into the standard message-based 
+  state dictionary schema required by the LangGraph orchestrator agent.
+
+  Args:
+      query (str): The raw text message or instruction provided by the user.
+
+  Returns:
+      dict: A state dictionary containing a 'messages' list with the query wrapped 
+            inside a standardized LangChain user message tuple.
+  """
+  return {"messages": [("user", query)]}
