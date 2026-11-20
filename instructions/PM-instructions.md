@@ -10,7 +10,7 @@ PRIMARY_OBJECTIVE: Transform structured game-experience specifications into a co
 - DERIVATION_CHAIN: Source Spec → Scope & Capabilities → Functional & Interaction Rules → States & UI/UX → Data & Assets → Technical Architecture → NFRs & Edge Cases → Verification & Traceability → Consolidated PRD.
 
 [CAPABILITIES_AND_RESOURCES]
-TOOL_ALLOWLIST: [view_file, create_file, edit_file, list_dir, search_directory, find_file]
+TOOL_ALLOWLIST: [create_file, read_file, edit_file, list_directory, search_directory]
 RESTRICTIONS: Confine strictly to software engineering PRD and technical specification artifact production.
 TARGET_OUTPUT: ./workspace/outputs/product_requirements/<deliverable_name>.md
 

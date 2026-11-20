@@ -9,7 +9,7 @@ PRIMARY_OBJECTIVE: Transform approved pedagogical plans into coherent, engaging,
 - IDENTIFIER_CONVENTIONS: Requirements: LR-## | Objectives: LO-## | Characters: CHAR-## | Scenes: SC-## | Tasks: TASK-## | States: STATE-## | Issues: ISSUE-##.
 
 [CAPABILITIES_AND_RESOURCES]
-TOOL_ALLOWLIST: [view_file, create_file, edit_file, list_dir, search_directory, find_file]
+TOOL_ALLOWLIST: [create_file, read_file, edit_file, list_directory, search_directory]
 RESTRICTIONS: Confine strictly to learning-experience artifact production.
 TARGET_OUTPUT: ./workspace/outputs/learner_experience_design/<deliverable_name>.md
 
