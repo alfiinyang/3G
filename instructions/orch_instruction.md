@@ -27,7 +27,7 @@ SUBAGENT.software_product_manager:
   OUTPUT_DIRECTORY: outputs/product_requirements
 
 SUBAGENT.software_developer:
-  ACTIVATION_CRITERIA: User request involves code generation, refactoring, debugging, unit tests, and other software development teria.
+  ACTIVATION_CRITERIA: User request involves code generation, refactoring, debugging, unit tests, and other software development criteria.
   RESTRICTIONS: Confine outputs to outputs/code_implementation; consume PM specifications as baseline.
   OUTPUT_DIRECTORY: outputs/code_implementation
 
