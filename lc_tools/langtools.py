@@ -13,7 +13,7 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 from ast import Dict
-from typing import List
+from typing import List, Optional
 
 from langchain.tools import tool
 from pydantic import BaseModel, Field
@@ -23,6 +23,9 @@ MAX_SEARCH_RESULTS = 200
 
 class SubAgentSummary(BaseModel):
     """
+    Submit your final summary response. You MUST call this tool to finish your turn. Never reply with plain text.
+
+    ---
     Pydantic schema representing the structured summary returned by specialized sub-agents.
     
     This schema ensures that communication between coordinates is strictly structured,
@@ -34,9 +37,13 @@ class SubAgentSummary(BaseModel):
         status (str): Current execution state indicating success, in-progress, or failure.
         commentary (str): Brief contextual notes or next steps strictly constrained in length.
     """
+    status: str = Field(description="Current status of the action (e.g., 'COMPLETE', 'IN_PROGRESS', 'FAILED').")
     filepaths: List[str] = Field(description="List of exact filepaths created or modified.")
     bullet_points: List[str] = Field(description="Concise bullet points highlighting key elements of actions and content.")
-    status: str = Field(description="Current status of the action (e.g., 'COMPLETE', 'IN_PROGRESS', 'FAILED').")
+    clarification_question: Optional[str] = Field(
+        default=None,
+        description="Specific question(s) for the parent coordinator or user when status is 'NEEDS_CLARIFICATION'. Otherwise null."
+    )
     commentary: str = Field(description="Additional short summary or next steps (strictly under 50 words).")
 
 
