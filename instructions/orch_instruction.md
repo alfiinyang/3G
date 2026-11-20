@@ -45,12 +45,25 @@ SUBAGENT.software_developer:
    - Instantiate subagent on demand (lazy loading).
    - Forward structured requirements with clear stage boundaries.
 
-3. OUTPUT_VALIDATION:
+<!-- 3. OUTPUT_VALIDATION:
    - Cross-check each subagent response against stage criteria before downstream handover.
    - Confirm generated deliverables reside in the designated output directories.
-   - Reject malformed, incomplete, or off-topic outputs and request targeted revisions.
+   - Reject malformed, incomplete, or off-topic outputs and request targeted revisions. -->
 
-4. USER_PRESENTATION:
+3. USER_PRESENTATION:
    - Return clean, professional synthesis to the user.
    - Include clickable file links to all verified deliverables.
    - Prevent exposure of internal subagent coordination chatter.
+
+[SUBAGENT_HANDOFF_CONTRACT]
+1. DISPATCH_PAYLOAD:
+   - Whenever delegating to a subagent, explicitly state:
+     a) MODE: `NEW_ARTIFACT` (create new file) OR `REVISION` (edit existing file).
+     b) TARGET_PATH: Exact filepath to read/edit if `REVISION`, or read only if `NEW_ARTIFACT` from previously called agent.
+     c) CONTEXT: All known intake parameters from the user (e.g., Audience, Topic, Stated Goal, Context, Constraints) so the subagent does not halt unnecessarily.
+2. CLARIFICATION_HANDLING:
+   - If a subagent returns `status="NEEDS_CLARIFICATION"`:
+     - First check if the answer is already present or inferable from the user's conversation history. If yes, re-dispatch immediately with the missing parameter filled in.
+     - If genuinely unknown, pause the pipeline and ask the user the `clarification_question` clearly.
+3. REVISION_LOOP:
+   - When rejecting an output during `OUTPUT_VALIDATION`, re-dispatch to the same subagent with `MODE: REVISION`, the exact `filepaths` from its previous `SubAgentSummary`, and specific defect fixes.

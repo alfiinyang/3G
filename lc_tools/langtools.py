@@ -23,7 +23,7 @@ MAX_SEARCH_RESULTS = 200
 
 class SubAgentSummary(BaseModel):
     """
-    Submit your final summary response. You MUST call this tool to finish your turn. Never reply with plain text.
+    `Submit your final summary response. You MUST call this tool to finish your turn. Never reply with plain text.`
 
     ---
     Pydantic schema representing the structured summary returned by specialized sub-agents.
@@ -37,7 +37,7 @@ class SubAgentSummary(BaseModel):
         status (str): Current execution state indicating success, in-progress, or failure.
         commentary (str): Brief contextual notes or next steps strictly constrained in length.
     """
-    status: str = Field(description="Current status of the action (e.g., 'COMPLETE', 'IN_PROGRESS', 'FAILED').")
+    status: str = Field(description="Current status of the action (e.g., 'COMPLETE', 'IN_PROGRESS', 'NEEDS_CLARIFICATION', 'FAILED').")
     filepaths: List[str] = Field(description="List of exact filepaths created or modified.")
     bullet_points: List[str] = Field(description="Concise bullet points highlighting key elements of actions and content.")
     clarification_question: Optional[str] = Field(
