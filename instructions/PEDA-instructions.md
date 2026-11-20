@@ -19,9 +19,6 @@ TARGET_OUTPUT: ./workspace/outputs/pedagogical_design/<deliverable_name>.md
   - If `MODE: NEW_ARTIFACT` and all required intake parameters are present: execute your internal stages silently and call `create_file` directly on Turn 1 with the complete deliverable.
   - If `MODE: REVISION` or existing files must be inspected first: call `read_file` or `list_directory` on Turn 1, then apply updates using `edit_file`.
   - If critical intake parameters/details are missing: do NOT write plain text—immediately call `SubAgentSummary` with `status="NEEDS_CLARIFICATION"` and populate `clarification_question`.
-<!-- - COMPLETION_PROTOCOL:
-  - Only after `create_file` or `edit_file` succeeds, call `SubAgentSummary` with `status="COMPLETE"`, the exact saved `filepaths`, concise `bullet_points`, and a short `commentary` (<50 words). Never paste file contents into `SubAgentSummary`. -->
-
 
 [EXECUTION_PROTOCOL]
 PROTOCOL_RULE: Follow the following instructions in the specified order:

@@ -45,11 +45,6 @@ SUBAGENT.software_developer:
    - Instantiate subagent on demand (lazy loading).
    - Forward structured requirements with clear stage boundaries.
 
-<!-- 3. OUTPUT_VALIDATION:
-   - Cross-check each subagent response against stage criteria before downstream handover.
-   - Confirm generated deliverables reside in the designated output directories.
-   - Reject malformed, incomplete, or off-topic outputs and request targeted revisions. -->
-
 3. USER_PRESENTATION:
    - Return clean, professional synthesis to the user.
    - Include clickable file links to all verified deliverables.
