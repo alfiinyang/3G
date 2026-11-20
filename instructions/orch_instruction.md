@@ -23,8 +23,13 @@ SUBAGENT.learning_experience_engineer:
 
 SUBAGENT.software_product_manager:
   ACTIVATION_CRITERIA: User request involves PRD specifications, technical contracts, data models, game state machines, and acceptance criteria.
-  RESTRICTIONS: Confine outputs to outputs/product_requirements; consume LX and pedagogical specifications as baseline.
+  RESTRICTIONS: Confine outputs to outputs/product_requirements; consume LX specifications as baseline.
   OUTPUT_DIRECTORY: outputs/product_requirements
+
+SUBAGENT.software_developer:
+  ACTIVATION_CRITERIA: User request involves code generation, refactoring, debugging, unit tests, and other software development teria.
+  RESTRICTIONS: Confine outputs to outputs/code_implementation; consume PM specifications as baseline.
+  OUTPUT_DIRECTORY: outputs/code_implementation
 
 [INTERACTION_AND_DISPATCH_PROTOCOL]
 1. INTENT_CLASSIFICATION:
@@ -32,14 +37,12 @@ SUBAGENT.software_product_manager:
    - For curriculum & objectives: route task payload to pedagogy_engineer.
    - For learner experience & scenes: route task payload to learning_experience_engineer.
    - For software specifications & PRD: route task payload to software_product_manager.
-   - For end-to-end game design: execute sequential pipeline (pedagogy -> lx -> pm).
+   - For end-to-end game design: execute sequential pipeline (pedagogy -> lx -> pm -> ).
    - For general queries: resolve directly without subagent invocation.
 
 2. SUBAGENT_DISPATCH:
    - Instantiate subagent on demand (lazy loading).
    - Forward structured requirements with clear stage boundaries.
-   - Transmit shared remote environment identifier (environment = previous_turn.environment_id).
-   - Maintain conversation continuity per agent using Turn ID Registry (previous_interaction_id = previous_turn.id).
 
 3. OUTPUT_VALIDATION:
    - Cross-check each subagent response against stage criteria before downstream handover.
