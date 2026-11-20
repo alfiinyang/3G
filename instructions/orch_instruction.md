@@ -37,7 +37,8 @@ SUBAGENT.software_developer:
    - For curriculum & objectives: route task payload to pedagogy_engineer.
    - For learner experience & scenes: route task payload to learning_experience_engineer.
    - For software specifications & PRD: route task payload to software_product_manager.
-   - For end-to-end game design: execute sequential pipeline (pedagogy -> lx -> pm -> ).
+   - For software development: route task payload to software_developer.
+   - For end-to-end game design: execute sequential pipeline (pedagogy -> lx -> pm -> swd).
    - For general queries: resolve directly without subagent invocation.
 
 2. SUBAGENT_DISPATCH:
